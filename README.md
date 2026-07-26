@@ -1,5 +1,6 @@
-# Da_VOCE_a_TESTO
-Un piccolo programmino che usa una ia locale per capire ciò che dite e scriverlo in inglese nella chat di gioco di star citizen
+<br>
+
+[![Scarica l'installer](https://github.com/MrRevotv/AUTOINSTALLER-Traduzione-italiana-Star-Citizen/blob/main/Immagini%20Github/button-1187460_1280.png?raw=true)](https://github.com/MrRevotv/StarCitizenItaLauncher/releases/latest/download/StarCitizenItaLauncher.exe)
 
 
 # Voice to Chat — traduzione vocale in tempo reale per Star Citizen
