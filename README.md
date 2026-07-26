@@ -1,6 +1,6 @@
 <br>
 
-[![Scarica l'installer](https://github.com/MrRevotv/AUTOINSTALLER-Traduzione-italiana-Star-Citizen/blob/main/Immagini%20Github/button-1187460_1280.png?raw=true)](https://github.com/MrRevotv/StarCitizenItaLauncher/releases/latest/download/StarCitizenItaLauncher.exe)
+[![Scarica l'installer](https://github.com/MrRevotv/AUTOINSTALLER-Traduzione-italiana-Star-Citizen/blob/main/Immagini%20Github/button-1187460_1280.png?raw=true)](https://github.com/MrRevotv/Da_VOCE_a_TESTO/blob/main/voice_to_chat.exe)
 
 
 # Voice to Chat — traduzione vocale in tempo reale per Star Citizen
