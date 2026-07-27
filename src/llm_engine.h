@@ -20,13 +20,17 @@ public:
     // inglese in modo più affidabile). glossaryInstructions (opzionale) è
     // una frase già pronta con le traduzioni fisse del glossario personale
     // dell'utente (vedi glossary.h), inserita nel prompt di sistema.
+    // useGamingSlang: true = tono/gergo da videogiocatore (default),
+    // false = traduzione naturale/neutra, fedele al significato ma senza
+    // inventare slang di gioco (comportamento da "speech to text" normale).
     // Ritorna la stringa originale se il motore non è inizializzato o in
     // caso di errore, così il programma non si blocca mai per colpa della
     // traduzione.
     std::string translateGamingPhrase(const std::string& text,
                                        const std::string& sourceLanguageName,
                                        const std::string& targetLanguageName,
-                                       const std::string& glossaryInstructions = "");
+                                       const std::string& glossaryInstructions = "",
+                                       bool useGamingSlang = true);
 
 private:
     void* m_model = nullptr; // llama_model*

@@ -42,6 +42,7 @@ set(MINIAUDIO_DIR ${CMAKE_SOURCE_DIR}/external/miniaudio)
 
 add_executable(voice_to_chat WIN32
     src/gui.cpp
+    src/overlay.cpp
     src/hotkey_listener.cpp
     src/joystick_input.cpp
     src/audio_capture.cpp

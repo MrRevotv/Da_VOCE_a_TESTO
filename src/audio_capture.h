@@ -3,6 +3,7 @@
 #include <vector>
 #include <string>
 #include <mutex>
+#include <atomic>
 #include <cstdint>
 
 // Nome + indice di una periferica di cattura audio disponibile sul sistema.
@@ -39,6 +40,16 @@ public:
     // accumulati dall'ultimo startRecording().
     std::vector<float> getSamples();
 
+    // Amplificazione applicata a ogni campione catturato (1.0 = nessuna
+    // modifica). Utile se il microfono è troppo debole/troppo forte.
+    void setGain(float gain) { m_gain.store(gain); }
+    float getGain() const { return m_gain.load(); }
+
+    // Livello istantaneo (RMS, dopo il gain) dell'ultimo blocco audio
+    // ricevuto: aggiornato continuamente, anche quando NON si sta
+    // registrando (utile per un misuratore live nella GUI).
+    float getCurrentLevel() const { return m_currentLevel.load(); }
+
     static constexpr int kSampleRate = 16000;
 
     // Pubblico solo perché chiamato dalla callback audio libera definita in
@@ -54,4 +65,7 @@ private:
     std::mutex m_mutex;
     std::vector<std::vector<float>> m_perDeviceBuffers; // un buffer per periferica
     bool m_recording = false;
+
+    std::atomic<float> m_gain{ 1.0f };
+    std::atomic<float> m_currentLevel{ 0.0f };
 };

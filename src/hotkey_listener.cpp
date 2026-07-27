@@ -49,6 +49,8 @@ namespace {
             case VK_MBUTTON:  return "tasto centrale del mouse";
             case VK_XBUTTON1: return "tasto laterale mouse (indietro)";
             case VK_XBUTTON2: return "tasto laterale mouse (avanti)";
+            case VK_RETURN:   return "Invio";
+            case VK_ESCAPE:   return "Esc";
             case VK_SPACE:    return "Spazio";
             case VK_TAB:      return "Tab";
             case VK_CAPITAL:  return "Blocco Maiuscole";

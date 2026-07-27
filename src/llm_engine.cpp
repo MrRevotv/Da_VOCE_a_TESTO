@@ -39,7 +39,8 @@ bool LlmEngine::init(const std::string& modelPath, int nGpuLayers) {
 std::string LlmEngine::translateGamingPhrase(const std::string& text,
                                               const std::string& sourceLanguageName,
                                               const std::string& targetLanguageName,
-                                              const std::string& glossaryInstructions) {
+                                              const std::string& glossaryInstructions,
+                                              bool useGamingSlang) {
     if (!m_model || text.empty()) return text;
 
     llama_model* model = static_cast<llama_model*>(m_model);
@@ -48,14 +49,21 @@ std::string LlmEngine::translateGamingPhrase(const std::string& text,
     // Prompt in formato ChatML (compatibile con Qwen2.5-Instruct e molti altri
     // modelli istruiti recenti). Scritto in inglese: i modelli seguono
     // istruzioni in inglese in modo più affidabile indipendentemente dalla
-    // combinazione di lingue coinvolta. Il "system" spiega il contesto
-    // gaming e chiede SOLO la traduzione, per evitare spiegazioni extra.
+    // combinazione di lingue coinvolta. Il "system" chiede SOLO la
+    // traduzione, per evitare spiegazioni extra.
+    std::string toneInstruction = useGamingSlang
+        ? "This is the voice chat of a video game (Star Citizen): translate using a "
+          "natural, casual gamer tone and in-game slang when appropriate "
+          "(e.g. \"I'm down\" for someone knocked out, \"enemy spotted\", \"cover me\"). "
+        : "Translate naturally and fluently, preserving the original meaning and tone "
+          "as faithfully as possible. Do NOT invent gaming slang or change the register "
+          "of the phrase: translate it the way a normal, accurate speech-to-text "
+          "translation would, just in natural language rather than word-for-word. ";
+
     std::string prompt =
         "<|im_start|>system\n"
-        "You are a translator for the voice chat of a video game (Star Citizen). "
-        "Translate the following phrase from " + sourceLanguageName + " into " + targetLanguageName + ", "
-        "using a natural, casual gamer tone and in-game slang when appropriate "
-        "(e.g. \"I'm down\" for someone knocked out, \"enemy spotted\", \"cover me\"). "
+        "You are a translator. Translate the following phrase from " + sourceLanguageName +
+        " into " + targetLanguageName + ". " + toneInstruction +
         "These are proper nouns of in-game locations: do NOT translate or alter them, "
         "keep them exactly as written: " + scLocationsAsCommaList() + ". " +
         glossaryInstructions +

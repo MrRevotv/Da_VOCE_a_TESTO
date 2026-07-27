@@ -5,6 +5,7 @@
 
 #include <cstring>
 #include <algorithm>
+#include <cmath>
 
 namespace {
     // Contesto usato ovunque serva enumerare/aprire periferiche: uno per
@@ -131,14 +132,35 @@ bool AudioCapture::init(const std::vector<int>& deviceIndices) {
 }
 
 void AudioCapture::onAudioData(int deviceSlot, const float* input, unsigned int frameCount) {
-    if (!m_recording || input == nullptr) return;
+    if (input == nullptr) return;
+
+    float gain = m_gain.load();
+
+    // Livello istantaneo (RMS) per il misuratore: calcolato sempre, anche
+    // quando non si sta registrando, così l'indicatore in GUI è "live".
+    if (frameCount > 0) {
+        double sumSq = 0.0;
+        for (unsigned int i = 0; i < frameCount; ++i) {
+            float s = input[i] * gain;
+            sumSq += static_cast<double>(s) * static_cast<double>(s);
+        }
+        m_currentLevel.store(static_cast<float>(std::sqrt(sumSq / frameCount)));
+    }
+
+    if (!m_recording) return;
     if (deviceSlot < 0) return;
 
     std::lock_guard<std::mutex> lock(m_mutex);
     if (static_cast<size_t>(deviceSlot) >= m_perDeviceBuffers.size()) return;
 
     auto& buf = m_perDeviceBuffers[deviceSlot];
-    buf.insert(buf.end(), input, input + frameCount);
+    buf.reserve(buf.size() + frameCount);
+    for (unsigned int i = 0; i < frameCount; ++i) {
+        float s = input[i] * gain;
+        if (s > 1.0f) s = 1.0f;
+        else if (s < -1.0f) s = -1.0f;
+        buf.push_back(s);
+    }
 }
 
 void AudioCapture::startRecording() {

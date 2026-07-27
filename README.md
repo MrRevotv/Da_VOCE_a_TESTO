@@ -1,8 +1,3 @@
-<br>
-
-[![Scarica l'installer](https://github.com/MrRevotv/AUTOINSTALLER-Traduzione-italiana-Star-Citizen/blob/main/Immagini%20Github/button-1187460_1280.png?raw=true)](https://github.com/MrRevotv/Da_VOCE_a_TESTO/releases/download/v1.0/voice_to_chat.exe)
-
-
 # Voice to Chat — traduzione vocale in tempo reale per Star Citizen
 
 Parla nel microfono, il programma trascrive, traduce nella lingua che scegli

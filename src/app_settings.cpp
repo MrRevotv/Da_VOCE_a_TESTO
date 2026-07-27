@@ -31,6 +31,26 @@ AppSettings AppSettings::load() {
             s.targetLanguageIndex = std::atoi(rest.c_str());
         } else if (key == "autoSend") {
             s.autoSend = (rest == "1");
+        } else if (key == "gamingTone") {
+            s.gamingTone = (rest == "1");
+        } else if (key == "chatOpenEnabled") {
+            s.chatOpenEnabled = (rest == "1");
+        } else if (key == "chatOpenKeyVk") {
+            s.chatOpenKeyVk = std::atoi(rest.c_str());
+        } else if (key == "chatSendKeyVk") {
+            s.chatSendKeyVk = std::atoi(rest.c_str());
+        } else if (key == "overlayEnabled") {
+            s.overlayEnabled = (rest == "1");
+        } else if (key == "overlayOpacity") {
+            s.overlayOpacity = std::atoi(rest.c_str());
+        } else if (key == "overlayX") {
+            s.overlayX = std::atoi(rest.c_str());
+        } else if (key == "overlayY") {
+            s.overlayY = std::atoi(rest.c_str());
+        } else if (key == "silenceThreshold") {
+            s.silenceThreshold = std::atof(rest.c_str());
+        } else if (key == "micGain") {
+            s.micGain = (float)std::atof(rest.c_str());
         } else if (key == "device") {
             s.selectedDevices.push_back(std::atoi(rest.c_str()));
         } else if (key == "trigger") {
@@ -70,6 +90,16 @@ void AppSettings::save() const {
     file << "sourceLang=" << sourceLanguageIndex << "\n";
     file << "targetLang=" << targetLanguageIndex << "\n";
     file << "autoSend=" << (autoSend ? 1 : 0) << "\n";
+    file << "gamingTone=" << (gamingTone ? 1 : 0) << "\n";
+    file << "chatOpenEnabled=" << (chatOpenEnabled ? 1 : 0) << "\n";
+    file << "chatOpenKeyVk=" << chatOpenKeyVk << "\n";
+    file << "chatSendKeyVk=" << chatSendKeyVk << "\n";
+    file << "overlayEnabled=" << (overlayEnabled ? 1 : 0) << "\n";
+    file << "overlayOpacity=" << overlayOpacity << "\n";
+    file << "overlayX=" << overlayX << "\n";
+    file << "overlayY=" << overlayY << "\n";
+    file << "silenceThreshold=" << silenceThreshold << "\n";
+    file << "micGain=" << micGain << "\n";
 
     for (int d : selectedDevices) {
         file << "device=" << d << "\n";

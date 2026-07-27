@@ -13,6 +13,16 @@ struct AppSettings {
     int sourceLanguageIndex = 0;         // indice in supportedLanguages()
     int targetLanguageIndex = 1;
     bool autoSend = true;
+    bool gamingTone = true;    // true = gergo da videogiocatore, false = tono naturale/neutro
+    bool chatOpenEnabled = true;
+    int chatOpenKeyVk = 0x0D;  // VK_RETURN
+    int chatSendKeyVk = 0x0D;  // VK_RETURN
+    bool overlayEnabled = true;
+    int overlayOpacity = 230;
+    int overlayX = -1;
+    int overlayY = -1;
+    double silenceThreshold = 0.01;
+    float micGain = 1.0f;
     std::vector<int> selectedDevices;    // vuoto = periferica predefinita di sistema
 
     static AppSettings load();

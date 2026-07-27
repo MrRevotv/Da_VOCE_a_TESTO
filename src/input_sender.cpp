@@ -79,8 +79,8 @@ namespace InputSender {
         }
     }
 
-    void pressEnter() {
-        UINT scanCode = MapVirtualKeyW(VK_RETURN, MAPVK_VK_TO_VSC);
+    void pressKey(int virtualKey) {
+        UINT scanCode = MapVirtualKeyW((UINT)virtualKey, MAPVK_VK_TO_VSC);
 
         INPUT input[2] = {};
         input[0].type = INPUT_KEYBOARD;
@@ -93,20 +93,23 @@ namespace InputSender {
         SendInput(2, input, sizeof(INPUT));
     }
 
-    void sendChatMessage(const std::string& utf8Text, bool autoSend, int delayAfterOpenMs, int delayBeforeSendMs) {
+    void sendChatMessage(const std::string& utf8Text, bool autoSend, bool openEnabled,
+                          int openKeyVk, int sendKeyVk, int delayAfterOpenMs, int delayBeforeSendMs) {
         if (utf8Text.empty()) return;
 
-        pressEnter(); // apre la chat in Star Citizen
-        std::this_thread::sleep_for(std::chrono::milliseconds(delayAfterOpenMs));
+        if (openEnabled) {
+            pressKey(openKeyVk); // apre la chat (Invio di default, personalizzabile)
+            std::this_thread::sleep_for(std::chrono::milliseconds(delayAfterOpenMs));
+        }
 
         typeText(utf8Text);
 
         if (autoSend) {
             std::this_thread::sleep_for(std::chrono::milliseconds(delayBeforeSendMs));
-            pressEnter(); // invia il messaggio
+            pressKey(sendKeyVk); // invia il messaggio (Invio di default, personalizzabile)
         }
         // Se autoSend è false, il testo resta nella casella di chat aperta:
-        // l'utente decide se inviarlo (Invio) o annullarlo (Esc) a mano.
+        // l'utente decide se inviarlo o annullarlo a mano.
     }
 
 } // namespace InputSender
