@@ -142,3 +142,5 @@ accetti che:
   software per comunicazioni critiche.
 
 Se non accetti queste condizioni, non utilizzare questo software.
+
+Presente una modalità sperimentale di traduzione simultanea con funzione ocr, attualmente non pronta per essere usata in maniera stabile.
