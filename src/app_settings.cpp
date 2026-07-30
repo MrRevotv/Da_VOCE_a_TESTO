@@ -51,6 +51,24 @@ AppSettings AppSettings::load() {
             s.silenceThreshold = std::atof(rest.c_str());
         } else if (key == "micGain") {
             s.micGain = (float)std::atof(rest.c_str());
+        } else if (key == "ocrEnabled") {
+            s.ocrEnabled = (rest == "1");
+        } else if (key == "ocrSourceLanguageIndex") {
+            s.ocrSourceLanguageIndex = std::atoi(rest.c_str());
+        } else if (key == "ocrTargetLanguageIndex") {
+            s.ocrTargetLanguageIndex = std::atoi(rest.c_str());
+        } else if (key == "ocrAutoDetect") {
+            s.ocrAutoDetect = (rest == "1");
+        } else if (key == "chatFilterTag") {
+            s.chatFilterTag = rest;
+        } else if (key == "ocrRegionX") {
+            s.ocrRegionX = std::atoi(rest.c_str());
+        } else if (key == "ocrRegionY") {
+            s.ocrRegionY = std::atoi(rest.c_str());
+        } else if (key == "ocrRegionW") {
+            s.ocrRegionW = std::atoi(rest.c_str());
+        } else if (key == "ocrRegionH") {
+            s.ocrRegionH = std::atoi(rest.c_str());
         } else if (key == "device") {
             s.selectedDevices.push_back(std::atoi(rest.c_str()));
         } else if (key == "trigger") {
@@ -100,6 +118,15 @@ void AppSettings::save() const {
     file << "overlayY=" << overlayY << "\n";
     file << "silenceThreshold=" << silenceThreshold << "\n";
     file << "micGain=" << micGain << "\n";
+    file << "ocrEnabled=" << (ocrEnabled ? 1 : 0) << "\n";
+    file << "ocrSourceLanguageIndex=" << ocrSourceLanguageIndex << "\n";
+    file << "ocrTargetLanguageIndex=" << ocrTargetLanguageIndex << "\n";
+    file << "ocrAutoDetect=" << (ocrAutoDetect ? 1 : 0) << "\n";
+    file << "chatFilterTag=" << chatFilterTag << "\n";
+    file << "ocrRegionX=" << ocrRegionX << "\n";
+    file << "ocrRegionY=" << ocrRegionY << "\n";
+    file << "ocrRegionW=" << ocrRegionW << "\n";
+    file << "ocrRegionH=" << ocrRegionH << "\n";
 
     for (int d : selectedDevices) {
         file << "device=" << d << "\n";

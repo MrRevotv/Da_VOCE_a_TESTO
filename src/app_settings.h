@@ -23,6 +23,15 @@ struct AppSettings {
     int overlayY = -1;
     double silenceThreshold = 0.01;
     float micGain = 1.0f;
+    bool ocrEnabled = false;
+    int ocrSourceLanguageIndex = 0;
+    int ocrTargetLanguageIndex = 0;
+    bool ocrAutoDetect = false;
+    std::string chatFilterTag;
+    int ocrRegionX = -1;
+    int ocrRegionY = -1;
+    int ocrRegionW = -1;
+    int ocrRegionH = -1;
     std::vector<int> selectedDevices;    // vuoto = periferica predefinita di sistema
 
     static AppSettings load();

@@ -186,6 +186,67 @@ public:
         return m_micGain;
     }
 
+    // --- Traduzione schermo (OCR) --------------------------------------------
+    void setOcrEnabled(bool value) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_ocrEnabled = value;
+    }
+    bool getOcrEnabled() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_ocrEnabled;
+    }
+
+    void setOcrSourceLanguageIndex(int idx) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_ocrSourceLanguageIndex = idx;
+    }
+    int getOcrSourceLanguageIndex() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_ocrSourceLanguageIndex;
+    }
+
+    void setOcrTargetLanguageIndex(int idx) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_ocrTargetLanguageIndex = idx;
+    }
+    int getOcrTargetLanguageIndex() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_ocrTargetLanguageIndex;
+    }
+
+    void setOcrAutoDetect(bool value) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_ocrAutoDetect = value;
+    }
+    bool getOcrAutoDetect() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_ocrAutoDetect;
+    }
+
+    // Tag (contenuto tra "[]") dei messaggi da tenere anche nella finestra
+    // "Messaggi filtrati", oltre che nel riquadro di traduzione generale.
+    // Vuoto = nessun filtro attivo.
+    void setChatFilterTag(const std::string& tag) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_chatFilterTag = tag;
+    }
+    std::string getChatFilterTag() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_chatFilterTag;
+    }
+
+    // Regione schermo scelta (coordinate assolute). hasRegion=false se non
+    // è mai stata selezionata nulla.
+    void setOcrRegion(int x, int y, int w, int h) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_ocrRegionX = x; m_ocrRegionY = y; m_ocrRegionW = w; m_ocrRegionH = h;
+    }
+    bool getOcrRegion(int& x, int& y, int& w, int& h) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        x = m_ocrRegionX; y = m_ocrRegionY; w = m_ocrRegionW; h = m_ocrRegionH;
+        return m_ocrRegionW > 0 && m_ocrRegionH > 0;
+    }
+
 private:
     std::mutex m_mutex;
     std::deque<Entry> m_history;
@@ -197,6 +258,16 @@ private:
     int m_overlayY = -1;
     double m_silenceThreshold = 0.01;
     float m_micGain = 1.0f;
+
+    bool m_ocrEnabled = false;
+    int m_ocrSourceLanguageIndex = 0;
+    int m_ocrTargetLanguageIndex = 0;
+    bool m_ocrAutoDetect = false;
+    std::string m_chatFilterTag;
+    int m_ocrRegionX = -1;
+    int m_ocrRegionY = -1;
+    int m_ocrRegionW = -1;
+    int m_ocrRegionH = -1;
 
     std::vector<int> m_selectedDevices; // vuoto = periferica predefinita
     int m_sourceLanguageIndex = 0; // indice in supportedLanguages(): 0 = Italiano

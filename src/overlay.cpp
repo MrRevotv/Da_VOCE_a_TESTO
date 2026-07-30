@@ -19,10 +19,10 @@ namespace {
 
     COLORREF stateColor(int state) {
         switch (state) {
-            case 1: return RGB(60, 200, 110);   // in ascolto: verde
-            case 2: return RGB(230, 190, 40);   // elaborazione: giallo
-            case 3: return RGB(210, 60, 60);    // errore: rosso
-            default: return RGB(140, 145, 155); // pronto/inattivo: grigio
+        case 1: return RGB(60, 200, 110);   // in ascolto: verde
+        case 2: return RGB(230, 190, 40);   // elaborazione: giallo
+        case 3: return RGB(210, 60, 60);    // errore: rosso
+        default: return RGB(140, 145, 155); // pronto/inattivo: grigio
         }
     }
 
@@ -51,7 +51,8 @@ namespace {
                 g_unlockSecondsRemaining--;
                 if (g_unlockSecondsRemaining <= 0) {
                     relock(hwnd);
-                } else {
+                }
+                else {
                     InvalidateRect(hwnd, nullptr, TRUE);
                     UpdateWindow(hwnd);
                 }
@@ -115,103 +116,115 @@ namespace {
 
 namespace Overlay {
 
-void create(HINSTANCE hInstance, int savedX, int savedY, int savedOpacityAlpha) {
-    if (g_overlayHwnd) return;
+    void create(HINSTANCE hInstance, int savedX, int savedY, int savedOpacityAlpha) {
+        if (g_overlayHwnd) return;
 
-    g_opacity = savedOpacityAlpha;
+        g_opacity = savedOpacityAlpha;
 
-    g_overlayFont = CreateFontW(-14, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-    g_overlaySmallFont = CreateFontW(-11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+        g_overlayFont = CreateFontW(-14, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+        g_overlaySmallFont = CreateFontW(-11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
 
-    WNDCLASSW wc{};
-    wc.lpfnWndProc = OverlayWndProc;
-    wc.hInstance = hInstance;
-    wc.lpszClassName = L"VoiceToChatOverlay";
-    wc.hbrBackground = nullptr;
-    RegisterClassW(&wc);
+        WNDCLASSW wc{};
+        wc.lpfnWndProc = OverlayWndProc;
+        wc.hInstance = hInstance;
+        wc.lpszClassName = L"VoiceToChatOverlay";
+        wc.hbrBackground = nullptr;
+        RegisterClassW(&wc);
 
-    int x, y;
-    if (savedX >= 0 && savedY >= 0) {
-        x = savedX;
-        y = savedY;
-    } else {
-        int screenW = GetSystemMetrics(SM_CXSCREEN);
-        int screenH = GetSystemMetrics(SM_CYSCREEN);
-        x = screenW - OVERLAY_W - 24;
-        y = screenH - OVERLAY_H - 60;
+        int x, y;
+        if (savedX >= 0 && savedY >= 0) {
+            x = savedX;
+            y = savedY;
+        }
+        else {
+            int screenW = GetSystemMetrics(SM_CXSCREEN);
+            int screenH = GetSystemMetrics(SM_CYSCREEN);
+            x = screenW - OVERLAY_W - 24;
+            y = screenH - OVERLAY_H - 60;
+        }
+
+        g_overlayHwnd = CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_LAYERED,
+            L"VoiceToChatOverlay", L"", WS_POPUP,
+            x, y, OVERLAY_W, OVERLAY_H,
+            nullptr, nullptr, hInstance, nullptr);
+
+        if (g_overlayHwnd) {
+            SetLayeredWindowAttributes(g_overlayHwnd, 0, (BYTE)g_opacity, LWA_ALPHA);
+        }
     }
 
-    g_overlayHwnd = CreateWindowExW(
-        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_LAYERED,
-        L"VoiceToChatOverlay", L"", WS_POPUP,
-        x, y, OVERLAY_W, OVERLAY_H,
-        nullptr, nullptr, hInstance, nullptr);
-
-    if (g_overlayHwnd) {
-        SetLayeredWindowAttributes(g_overlayHwnd, 0, (BYTE)g_opacity, LWA_ALPHA);
+    void setVisible(bool visible) {
+        g_visible = visible;
+        if (g_overlayHwnd) {
+            ShowWindow(g_overlayHwnd, visible ? SW_SHOWNOACTIVATE : SW_HIDE);
+        }
     }
-}
 
-void setVisible(bool visible) {
-    g_visible = visible;
-    if (g_overlayHwnd) {
-        ShowWindow(g_overlayHwnd, visible ? SW_SHOWNOACTIVATE : SW_HIDE);
+    bool isVisible() {
+        return g_visible;
     }
-}
 
-bool isVisible() {
-    return g_visible;
-}
+    void updateStatus(const std::string& text, int state) {
+        if (!g_overlayHwnd) return;
 
-void updateStatus(const std::string& text, int state) {
-    if (!g_overlayHwnd) return;
-    g_statusText = std::wstring(text.begin(), text.end());
-    g_statusState = state;
-    InvalidateRect(g_overlayHwnd, nullptr, TRUE);
-}
+        // Conversione UTF-8 corretta (non "wstring(text.begin(), text.end())",
+        // che spezzerebbe i caratteri multi-byte come accenti o ideogrammi).
+        int size = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), (int)text.size(), nullptr, 0);
+        if (size > 0) {
+            g_statusText.assign(size, L'\0');
+            MultiByteToWideChar(CP_UTF8, 0, text.c_str(), (int)text.size(), g_statusText.data(), size);
+        }
+        else {
+            g_statusText.clear();
+        }
 
-void unlockForMove(int seconds) {
-    if (!g_overlayHwnd) return;
-
-    g_locked = false;
-    g_unlockSecondsRemaining = seconds;
-
-    LONG_PTR ex = GetWindowLongPtrW(g_overlayHwnd, GWL_EXSTYLE);
-    ex &= ~(WS_EX_TRANSPARENT | WS_EX_NOACTIVATE);
-    SetWindowLongPtrW(g_overlayHwnd, GWL_EXSTYLE, ex);
-
-    SetTimer(g_overlayHwnd, kUnlockTimerId, 1000, nullptr);
-    InvalidateRect(g_overlayHwnd, nullptr, TRUE);
-    UpdateWindow(g_overlayHwnd);
-}
-
-bool isUnlocked() {
-    return !g_locked;
-}
-
-void setOpacity(int alpha) {
-    g_opacity = alpha;
-    if (g_overlayHwnd) {
-        SetLayeredWindowAttributes(g_overlayHwnd, 0, (BYTE)g_opacity, LWA_ALPHA);
+        g_statusState = state;
+        InvalidateRect(g_overlayHwnd, nullptr, TRUE);
     }
-}
 
-int getOpacity() {
-    return g_opacity;
-}
+    void unlockForMove(int seconds) {
+        if (!g_overlayHwnd) return;
 
-void getPosition(int& x, int& y) {
-    x = -1; y = -1;
-    if (!g_overlayHwnd) return;
-    RECT r;
-    if (GetWindowRect(g_overlayHwnd, &r)) {
-        x = r.left;
-        y = r.top;
+        g_locked = false;
+        g_unlockSecondsRemaining = seconds;
+
+        LONG_PTR ex = GetWindowLongPtrW(g_overlayHwnd, GWL_EXSTYLE);
+        ex &= ~(WS_EX_TRANSPARENT | WS_EX_NOACTIVATE);
+        SetWindowLongPtrW(g_overlayHwnd, GWL_EXSTYLE, ex);
+
+        SetTimer(g_overlayHwnd, kUnlockTimerId, 1000, nullptr);
+        InvalidateRect(g_overlayHwnd, nullptr, TRUE);
+        UpdateWindow(g_overlayHwnd);
     }
-}
+
+    bool isUnlocked() {
+        return !g_locked;
+    }
+
+    void setOpacity(int alpha) {
+        g_opacity = alpha;
+        if (g_overlayHwnd) {
+            SetLayeredWindowAttributes(g_overlayHwnd, 0, (BYTE)g_opacity, LWA_ALPHA);
+        }
+    }
+
+    int getOpacity() {
+        return g_opacity;
+    }
+
+    void getPosition(int& x, int& y) {
+        x = -1; y = -1;
+        if (!g_overlayHwnd) return;
+        RECT r;
+        if (GetWindowRect(g_overlayHwnd, &r)) {
+            x = r.left;
+            y = r.top;
+        }
+    }
 
 } // namespace Overlay

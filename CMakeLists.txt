@@ -53,6 +53,11 @@ add_executable(voice_to_chat WIN32
     src/app_settings.cpp
     src/glossary.cpp
     src/model_downloader.cpp
+    src/screen_capture.cpp
+    src/region_selector.cpp
+    src/ocr_engine.cpp
+    src/ocr_overlay.cpp
+    src/chat_parser.cpp
 )
 
 target_include_directories(voice_to_chat PRIVATE
@@ -66,6 +71,7 @@ target_link_libraries(voice_to_chat PRIVATE
     user32.lib
     winhttp.lib
     shell32.lib
+    windowsapp.lib
 )
 
 # windows.h definisce delle macro max/min che confliggono con std::max/std::min
@@ -77,5 +83,13 @@ target_compile_definitions(voice_to_chat PRIVATE
     WIN32_LEAN_AND_MEAN
     UNICODE
     _UNICODE
+)
+
+# Solo il nostro eseguibile ha bisogno di C++20 (per le coroutine di
+# C++/WinRT usate dal modulo OCR): llama.cpp/whisper.cpp restano a C++17,
+# impostato sopra PRIMA di questa riga, quindi non ne risentono.
+set_target_properties(voice_to_chat PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON
 )
 
