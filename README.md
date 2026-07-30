@@ -1,4 +1,4 @@
-https://img.shields.io/github/downloads/MrRevotv/Da_VOCE_a_TESTO/total?style=for-the-badge
+![Download Totali](https://img.shields.io/github/downloads/MrRevotv/Da_VOCE_a_TESTO/total?style=for-the-badge)
 
 <br>
 
