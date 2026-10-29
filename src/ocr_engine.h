@@ -1,30 +1,36 @@
 #pragma once
 
+#include "screen_capture.h"
+
 #include <string>
 #include <vector>
-#include <cstdint>
 
-// Wrapper sul motore OCR integrato in Windows (Windows.Media.Ocr, via
-// C++/WinRT): nessuna libreria esterna da scaricare, funziona offline.
-// Richiede che il pacchetto lingua/OCR relativo sia installato in Windows
+// OCR integrato in Windows (Windows.Media.Ocr, via C++/WinRT): offline, niente
+// da scaricare. Serve il pacchetto della lingua installato in Windows
 // (Impostazioni -> Ora e lingua -> Lingua e area geografica).
 namespace OcrEngineWrapper {
 
-    // Ritorna il testo riconosciuto (righe unite da "\n"), o stringa vuota
-    // se non trova testo o se l'OCR per quella lingua non è disponibile
-    // sul sistema.
-    std::string recognizeText(const std::string& languageCode,
-                               const std::vector<uint8_t>& pixelDataBgra,
-                               int width, int height);
+    // Una riga di testo con la sua posizione nell'immagine (pixel).
+    struct Line {
+        std::string text;
+        int x = 0, y = 0, width = 0, height = 0;
+    };
 
-    // "Rilevamento automatico": prova l'OCR con OGNI lingua installata sul
-    // sistema (Impostazioni Windows -> Lingua e area geografica) e sceglie
-    // il risultato con più testo riconosciuto, come approssimazione pratica
-    // di un vero rilevatore di lingua (Windows non offre un OCR "agnostico
-    // alla lingua" per le immagini). detectedLanguageCode riceve il codice
-    // della lingua che ha dato il risultato migliore.
-    std::string recognizeTextAutoDetect(const std::vector<uint8_t>& pixelDataBgra,
-                                         int width, int height,
-                                         std::string& detectedLanguageCode);
+    // Le lingue OCR installate in Windows (codici come "it", "en-US").
+    std::vector<std::string> installedLanguages();
+
+    // C'è un OCR per questa lingua? (es. "pl", "ru"). Se no, si usa quello
+    // delle lingue del profilo di Windows.
+    bool isLanguageSupported(const std::string& code);
+
+    int maxImageDimension();
+
+    // Le righe in ordine di lettura (dall'alto). Le parti di una stessa riga
+    // che l'OCR separa (per esempio "[SQUADRA]" e "Nome: testo" se c'è uno
+    // spazio largo) vengono riunite. error riceve il motivo se fallisce.
+    std::vector<Line> recognize(const std::string& languageCode, const ScreenCapture::Image& image, std::string& error);
+
+    // Righe -> testo con un "a capo" tra una riga e l'altra.
+    std::string joinLines(const std::vector<Line>& lines);
 
 } // namespace OcrEngineWrapper

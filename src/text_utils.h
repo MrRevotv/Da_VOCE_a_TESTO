@@ -1,43 +1,47 @@
 #pragma once
 
 #include <string>
-#include <cctype>
+#include <vector>
 
-// A volte l'LLM di traduzione restituisce l'intera frase in MAIUSCOLO
-// (un difetto occasionale, non prevedibile in anticipo). Qui rileviamo il
-// caso e normalizziamo a "prima lettera maiuscola, resto minuscolo", che è
-// il formato naturale per una riga di chat.
+// Piccoli attrezzi per il testo, usati ovunque. Tutte le stringhe del
+// programma sono UTF-8 (std::string); le API di Windows vogliono UTF-16
+// (std::wstring): si converte SEMPRE con queste due funzioni, mai con
+// "std::wstring(s.begin(), s.end())", che rompe accenti e ideogrammi.
 namespace TextUtils {
 
-    inline std::string fixShoutingCase(const std::string& text) {
-        if (text.empty()) return text;
+    std::wstring utf8ToWide(const std::string& utf8);
+    std::string wideToUtf8(const std::wstring& wide);
 
-        int letters = 0, upperLetters = 0;
-        for (unsigned char c : text) {
-            if (std::isalpha(c)) {
-                letters++;
-                if (std::isupper(c)) upperLetters++;
-            }
-        }
+    std::string trim(const std::string& s);
+    // Spazi, a capo e tabulazioni consecutivi diventano uno spazio solo.
+    std::string collapseSpaces(const std::string& s);
+    // Minuscolo (anche per le lettere accentate, via Windows).
+    std::string toLower(const std::string& s);
 
-        // Se meno del 70% delle lettere è maiuscolo, il testo è già "normale":
-        // non tocchiamo nulla (rispettiamo acronimi legittimi tipo "UEE").
-        if (letters == 0 || upperLetters * 100 < letters * 70) return text;
+    bool startsWith(const std::string& s, const std::string& prefix);
+    bool containsIgnoreCase(const std::string& haystack, const std::string& needle);
 
-        std::string result = text;
-        bool firstLetterSeen = false;
-        for (char& c : result) {
-            unsigned char uc = static_cast<unsigned char>(c);
-            if (std::isalpha(uc)) {
-                if (!firstLetterSeen) {
-                    c = static_cast<char>(std::toupper(uc));
-                    firstLetterSeen = true;
-                } else {
-                    c = static_cast<char>(std::tolower(uc));
-                }
-            }
-        }
-        return result;
-    }
+    // Il termine compare nel testo come parola intera (non dentro un'altra:
+    // "Ita" non deve combaciare con "Italia"), senza distinzione di maiuscole.
+    bool containsWord(const std::string& text, const std::string& term);
+
+    // Se l'LLM restituisce tutta la frase in MAIUSCOLO (difetto occasionale),
+    // la riporta a "Prima lettera maiuscola, resto minuscolo". Le frasi già
+    // normali (anche con acronimi come "UEE") restano com'erano.
+    std::string fixShoutingCase(const std::string& text);
+
+    // Lettere accentate/speciali che la tastiera potrebbe non avere, sostituite
+    // con quella "semplice" più vicina (ñ -> n, ü -> u, ß -> ss, « -> ").
+    // Per i caratteri senza equivalente (ideogrammi...) ritorna stringa vuota.
+    std::wstring transliterate(wchar_t c);
+
+    // Chiave per riconoscere lo stesso messaggio letto due volte dall'OCR con
+    // piccole differenze: minuscolo, solo lettere e cifre, spazi compressi.
+    std::string normalizeForMatch(const std::string& s);
+
+    // Somiglianza 0..1 tra due stringhe (1 = identiche), da distanza di edit.
+    double similarity(const std::string& a, const std::string& b);
+
+    std::vector<std::string> splitLines(const std::string& s);
 
 } // namespace TextUtils

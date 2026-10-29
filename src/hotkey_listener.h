@@ -1,84 +1,82 @@
 #pragma once
 
-#include <functional>
-#include <thread>
 #include <atomic>
-#include <vector>
+#include <functional>
 #include <mutex>
 #include <string>
+#include <thread>
+#include <vector>
 
-// Un singolo "trigger" per il push-to-talk: può essere un tasto di
-// tastiera/mouse (Virtual-Key Code di Windows) oppure un bottone di un
-// joystick/HOTAS (identificato da id periferica + indice bottone, 0-based).
+// Un tasto per parlare: un tasto di tastiera/mouse (codice virtuale di
+// Windows) o un pulsante di joystick (id stabile della periferica + numero).
 struct TalkTrigger {
     enum class Type { Keyboard, Joystick };
     Type type = Type::Keyboard;
-    int vk = 0;            // usato se type == Keyboard
-    int joystickId = 0;    // usato se type == Joystick
-    int buttonIndex = 0;   // usato se type == Joystick (0-based)
+    int vk = 0;
+    std::string joystickId;   // GUID di istanza (vedi joystick_input.h)
+    std::string joystickName; // per mostrarlo anche se è scollegato
+    int buttonIndex = 0;      // 0-based
+
+    bool operator==(const TalkTrigger& o) const {
+        return type == o.type && (type == Type::Keyboard ? vk == o.vk : joystickId == o.joystickId && buttonIndex == o.buttonIndex);
+    }
 };
 
-// Ascolta in background lo stato di:
-//  - uno o più "talk trigger" (push-to-talk): mentre ALMENO UNO di questi è
-//    premuto, si registra. Utile per avere trigger diversi in contesti
-//    diversi (es. tasto del mouse a piedi, bottone del joystick in nave):
-//    basta aggiungerli entrambi, funzionano insieme senza bisogno di scegliere.
-//  - un numero qualsiasi di "tasti toggle": pressione singola, eseguono un
-//    callback (es. F10 = alterna invio automatico). Solo da tastiera/mouse.
-//
-// Usa GetAsyncKeyState/joystick polling (non RegisterHotKey) perché ci serve
-// sapere sia il momento della pressione CHE del rilascio, non solo un evento.
+// Ascolta, su un thread suo, i tasti per parlare (finché ALMENO UNO è premuto
+// si registra: per esempio il mouse a piedi e il joystick in nave) e i tasti
+// "interruttore" (pressione singola: F10 = invio automatico sì/no).
+// I callback partono dal thread di ascolto: devono essere brevi.
 class HotkeyListener {
 public:
-    HotkeyListener();
+    HotkeyListener() = default;
     ~HotkeyListener();
 
-    void setOnTalkStart(std::function<void()> callback);
-    void setOnTalkStop(std::function<void()> callback);
+    void setOnTalkStart(std::function<void()> cb) { m_onTalkStart = std::move(cb); }
+    void setOnTalkStop(std::function<void()> cb) { m_onTalkStop = std::move(cb); }
+    void registerToggleKey(int vk, std::function<void()> cb);
 
-    // Registra un tasto che esegue callback ogni volta che viene premuto
-    // (fronte di salita, non mentre resta tenuto premuto). Solo tastiera/mouse.
-    void registerToggleKey(int virtualKey, std::function<void()> callback);
-
-    // --- Gestione dei trigger push-to-talk (thread-safe) --------------------
-    void addTalkTrigger(const TalkTrigger& trigger);
-    void removeTalkTrigger(size_t index);
+    void setTalkTriggers(const std::vector<TalkTrigger>& triggers);
     std::vector<TalkTrigger> getTalkTriggers();
+    bool isAnyTalkTriggerDown();
 
-    // Etichetta leggibile per la GUI, es. "Tastiera/Mouse: tasto laterale"
-    // oppure "Joystick 1: bottone 5".
-    static std::string describeTrigger(const TalkTrigger& trigger);
+    // Durante la scelta di un tasto nuovo il push-to-talk è sospeso: premere
+    // il tasto da aggiungere non deve far partire una registrazione. Alla
+    // ripresa si aspetta che tutti i tasti siano rilasciati (il tasto appena
+    // scelto, di solito, è ancora premuto).
+    void setPaused(bool paused) {
+        if (!paused && m_paused) m_waitRelease = true;
+        m_paused = paused;
+    }
 
-    // Blocca (da chiamare su un thread dedicato, non quello della GUI) finché
-    // non rileva un nuovo tasto/bottone premuto (fronte di salita rispetto a
-    // quando è stata chiamata), o finché cancel non diventa true, o finché
-    // non passano timeoutMs millisecondi. Usata per il pulsante "Aggiungi
-    // tasto" della GUI: fa scegliere all'utente il prossimo input premendolo.
-    static bool captureNextInput(TalkTrigger& outTrigger, std::atomic<bool>& cancel, int timeoutMs = 20000);
+    static std::string describeTrigger(const TalkTrigger& t);
+    static std::string keyName(int vk);
+
+    // Aspetta il prossimo tasto/pulsante premuto (non uno già tenuto giù).
+    // allowJoystick=false: solo tastiera (per i tasti della chat). Il tasto
+    // sinistro del mouse non si accetta: lo si preme per usare la finestra, e
+    // come push-to-talk registrerebbe a ogni clic. Esc annulla.
+    static bool captureNextInput(TalkTrigger& out, std::atomic<bool>& cancel, int timeoutMs, bool allowJoystick);
 
     void start();
     void stop();
 
 private:
-    void pollLoop();
-    bool isAnyTalkTriggerDown();
+    void loop();
 
-    struct ToggleKeyState {
-        int virtualKey;
+    struct Toggle {
+        int vk;
         bool wasDown = false;
         std::function<void()> callback;
     };
 
-    std::mutex m_triggersMutex;
-    std::vector<TalkTrigger> m_talkTriggers;
-
-    std::vector<ToggleKeyState> m_toggleKeys;
-
+    std::mutex m_mutex;
+    std::vector<TalkTrigger> m_triggers;
+    std::vector<Toggle> m_toggles;
     std::atomic<bool> m_running{ false };
+    std::atomic<bool> m_paused{ false };
+    std::atomic<bool> m_waitRelease{ false };
     std::thread m_thread;
-
-    bool m_wasAnyTalkDown = false;
-
+    bool m_wasDown = false;
     std::function<void()> m_onTalkStart;
     std::function<void()> m_onTalkStop;
 };

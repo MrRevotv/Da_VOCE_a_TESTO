@@ -1,31 +1,29 @@
 #pragma once
 
-#include <windows.h>
-#include <vector>
 #include <cstdint>
+#include <vector>
 
-// Cattura una porzione di schermo tramite BitBlt (nativo GDI, nessuna
-// libreria esterna). Restituisce pixel in formato BGRA, compatibile
-// direttamente con l'OCR di Windows (BitmapPixelFormat::Bgra8).
+// Cattura di una zona dello schermo (GDI), pronta per l'OCR di Windows
+// (pixel BGRA, righe dall'alto verso il basso).
 namespace ScreenCapture {
 
-    // x,y,width,height: coordinate schermo assolute (multi-monitor incluso).
-    // Ritorna un vettore vuoto in caso di errore.
-    std::vector<uint8_t> captureRegion(int x, int y, int width, int height);
+    struct Image {
+        std::vector<uint8_t> pixels; // BGRA
+        int width = 0;
+        int height = 0;
+        bool empty() const { return pixels.empty(); }
+    };
 
-    // Hash veloce (non crittografico) del contenuto: usato per capire se
-    // l'immagine è cambiata rispetto all'ultima cattura, senza dover rifare
-    // l'OCR (costoso) se lo schermo in quella zona è rimasto identico.
-    uint64_t hashPixels(const std::vector<uint8_t>& pixels);
+    // x,y,w,h in coordinate schermo assolute (anche su più monitor).
+    Image capture(int x, int y, int width, int height);
 
-    // Come captureRegion, ma ingrandisce il risultato di "scale" volte
-    // (es. 2 = doppia risoluzione) prima di restituirlo. Il testo di chat
-    // nei giochi è spesso piccolo: l'OCR riconosce molto meglio le lettere
-    // (incluse parentesi quadre, spesso confuse con altre lettere quando
-    // piccole) se ingrandite prima del riconoscimento. outWidth/outHeight
-    // ricevono le dimensioni reali del buffer restituito (width*scale,
-    // height*scale).
-    std::vector<uint8_t> captureRegionUpscaled(int x, int y, int width, int height, int scale,
-        int& outWidth, int& outHeight);
+    // Per l'OCR: ingrandisce (il testo di chat è piccolo: ingrandito si legge
+    // molto meglio, parentesi quadre comprese), lo porta in scala di grigi, ne
+    // alza il contrasto e toglie lo sfondo dietro le lettere (pianeti, luci).
+    // maxDimension: lato massimo accettato dall'OCR.
+    Image prepareForOcr(const Image& source, int scale, int maxDimension);
+
+    // Impronta veloce del contenuto: se la zona non è cambiata, l'OCR si salta.
+    uint64_t hash(const Image& image);
 
 } // namespace ScreenCapture

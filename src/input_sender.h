@@ -1,38 +1,55 @@
 #pragma once
 
+#include <windows.h>
 #include <string>
+#include <vector>
 
-// Simula la digitazione da tastiera "umana" tramite SendInput, così il testo
-// finisce nella chat del gioco che ha il focus in quel momento.
+// Scrive il testo nella chat del gioco che ha il focus, come una tastiera
+// vera (SendInput con scan code: molte chat di gioco ignorano l'input "Unicode").
+// - Usa il layout di tastiera della finestra del gioco (italiano, inglese...),
+//   compresi i caratteri con AltGr (@ # [ ] { } sulla tastiera italiana).
+// - Prima di scrivere aspetta che Shift/Ctrl/Alt siano rilasciati, altrimenti
+//   le lettere uscirebbero modificate (MAIUSCOLE, scorciatoie...).
+// - I caratteri che la tastiera non ha (ñ, ü, ß... su tastiera italiana) si
+//   sostituiscono con la lettera semplice, oppure si mandano come Unicode.
 namespace InputSender {
 
-    // Digita ogni carattere della stringa (UTF-8 in ingresso, convertita internamente)
-    void typeText(const std::string& utf8Text);
+    enum class Unmappable { Transliterate, Unicode };
 
-    // Preme e rilascia un tasto qualsiasi (Virtual-Key Code di Windows).
-    // Es. VK_RETURN per Invio, ma può essere qualunque tasto configurato
-    // dall'utente per aprire/inviare la chat in giochi diversi.
+    struct Options {
+        bool openChat = true;
+        int openKeyVk = VK_RETURN;
+        bool autoSend = true;
+        int sendKeyVk = VK_RETURN;
+        int delayAfterOpenMs = 180;  // l'animazione di apertura della chat
+        int delayBeforeSendMs = 90;
+        int interCharDelayMs = 12;   // alcuni giochi perdono caratteri se si scrive troppo veloce
+        Unmappable unmappable = Unmappable::Transliterate;
+    };
+
+    // Un tasto da premere: scan code con i modificatori, o un carattere Unicode.
+    struct Stroke {
+        bool unicode = false;
+        wchar_t ch = 0;
+        WORD scan = 0;
+        bool extended = false;
+        bool shift = false, ctrl = false, alt = false; // ctrl+alt = AltGr
+    };
+
+    // Come scrivere text con il layout dato. dropped riceve i caratteri che non
+    // si possono scrivere in nessun modo (con Transliterate e senza equivalente).
+    std::vector<Stroke> planText(const std::wstring& text, HKL layout, Unmappable mode, std::wstring* dropped = nullptr);
+
+    // Aspetta che Shift, Ctrl, Alt e Win siano rilasciati (al massimo timeoutMs).
+    bool waitForModifiersReleased(int timeoutMs);
+
     void pressKey(int virtualKey);
 
-    // Flusso di invio completo, personalizzabile per adattarsi a giochi
-    // diversi da Star Citizen (che di default vuole Invio, scrivi, Invio):
-    //  - se openEnabled è true, preme openKeyVk per aprire la chat prima di scrivere
-    //  - digita il testo
-    //  - se autoSend è true, preme sendKeyVk per inviare il messaggio
-    // Se autoSend è false, il testo resta scritto nella chat aperta e
-    // l'invio (o l'annullamento) è lasciato all'utente.
-    // Le due pause sono regolabili perché dipendono dall'animazione di
-    // apertura chat del gioco e da quanto è "pesante" la digitazione.
-    void sendChatMessage(const std::string& utf8Text,
-                          bool autoSend = true,
-                          bool openEnabled = true,
-                          int openKeyVk = 0x0D /* VK_RETURN */,
-                          int sendKeyVk = 0x0D /* VK_RETURN */,
-                          int delayAfterOpenMs = 150,
-                          int delayBeforeSendMs = 80);
+    // Apre la chat (se richiesto), scrive, invia (se richiesto). Il layout è
+    // quello della finestra in primo piano.
+    void sendChatMessage(const std::string& utf8Text, const Options& options);
 
-    // Piccola pausa tra un carattere e l'altro (ms). Alcuni giochi perdono
-    // caratteri se digitati troppo velocemente: regolabile da qui.
-    void setInterCharDelayMs(int ms);
+    // Layout di tastiera della finestra in primo piano.
+    HKL foregroundLayout();
 
 } // namespace InputSender

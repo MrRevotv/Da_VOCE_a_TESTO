@@ -3,13 +3,14 @@
 #include <string>
 #include <vector>
 
-// Lingue supportate da whisper.cpp (codice ISO) e mostrate nella GUI.
-// englishName è usato nel prompt dell'LLM (i modelli seguono istruzioni in
-// inglese in modo più affidabile, indipendentemente dalla lingua coinvolta).
+// Lingue supportate: codice per whisper e per l'OCR di Windows, nome nella
+// finestra (in italiano) e nome per l'LLM (in inglese: i modelli seguono le
+// istruzioni in inglese in modo più affidabile, qualunque sia la coppia).
+// L'ORDINE NON VA CAMBIATO: le impostazioni salvate usano la posizione.
 struct LanguageOption {
-    const char* whisperCode;
-    const wchar_t* displayName; // mostrato nella GUI (in italiano)
-    const char* englishName;    // usato internamente nel prompt dell'LLM
+    const char* code;           // es. "it"
+    const wchar_t* displayName; // es. "Italiano"
+    const char* englishName;    // es. "Italian"
 };
 
 inline const std::vector<LanguageOption>& supportedLanguages() {
@@ -28,4 +29,10 @@ inline const std::vector<LanguageOption>& supportedLanguages() {
         { "tr", L"Turco",       "Turkish" },
     };
     return languages;
+}
+
+// Indice valido (quelli salvati da versioni vecchie o file rovinati tornano a 0).
+inline int clampLanguageIndex(int index) {
+    int n = (int)supportedLanguages().size();
+    return (index >= 0 && index < n) ? index : 0;
 }

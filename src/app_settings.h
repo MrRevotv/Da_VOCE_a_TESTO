@@ -1,39 +1,57 @@
 #pragma once
 
+#include "hotkey_listener.h"
+
 #include <string>
 #include <vector>
-#include "hotkey_listener.h" // per TalkTrigger
 
-// Impostazioni utente persistite in %appdata%\VoiceToChat\settings.cfg
-// (formato testuale semplice, niente librerie esterne per il parsing).
-// Salvate ogni volta che l'utente cambia qualcosa nella GUI, caricate
-// all'avvio del programma prima di creare la finestra.
+// Impostazioni salvate in %appdata%\VoiceToChat\settings.cfg (testo,
+// "chiave=valore", UTF-8). Si legge anche il file della versione precedente:
+// lingue, tasti, regione OCR... restano come erano.
 struct AppSettings {
-    std::vector<TalkTrigger> triggers;   // vuoto = usa il default (tasto mouse)
-    int sourceLanguageIndex = 0;         // indice in supportedLanguages()
+    // Voce
+    std::vector<TalkTrigger> triggers;   // vuoto = tasto laterale del mouse
+    int sourceLanguageIndex = 0;         // vedi languages.h
     int targetLanguageIndex = 1;
     bool autoSend = true;
-    bool gamingTone = true;    // true = gergo da videogiocatore, false = tono naturale/neutro
+    bool gamingTone = true;
+    std::vector<std::string> deviceNames; // microfoni scelti (vuoto = predefinito di Windows)
+    double silenceThreshold = 0.01;
+    float micGain = 1.0f;
+
+    // Scrittura nel gioco
     bool chatOpenEnabled = true;
-    int chatOpenKeyVk = 0x0D;  // VK_RETURN
-    int chatSendKeyVk = 0x0D;  // VK_RETURN
+    int chatOpenKeyVk = 0x0D;   // Invio
+    int chatSendKeyVk = 0x0D;   // Invio
+    int chatOpenDelayMs = 180;
+    int typingDelayMs = 12;
+    bool unicodeFallback = false; // caratteri che la tastiera non ha: false = lettera semplice, true = Unicode
+
+    // Overlay di stato
     bool overlayEnabled = true;
     int overlayOpacity = 230;
     int overlayX = -1;
     int overlayY = -1;
-    double silenceThreshold = 0.01;
-    float micGain = 1.0f;
+
+    // Traduzione dello schermo (OCR)
     bool ocrEnabled = false;
-    int ocrSourceLanguageIndex = 0;
-    int ocrTargetLanguageIndex = 0;
-    bool ocrAutoDetect = false;
+    int ocrTargetLanguageIndex = 0;      // si traducono solo i messaggi in inglese (language_guess.h)
     std::string chatFilterTag;
-    int ocrRegionX = -1;
-    int ocrRegionY = -1;
-    int ocrRegionW = -1;
-    int ocrRegionH = -1;
-    std::vector<int> selectedDevices;    // vuoto = periferica predefinita di sistema
+    int ocrRegionX = -1, ocrRegionY = -1, ocrRegionW = -1, ocrRegionH = -1;
+    int ocrOverlayX = -1, ocrOverlayY = -1; // -1 = sotto la zona letta
+    int ocrOverlayOpacity = 235;
+    int ocrMaxMessages = 6;
+
+    // Finestra
+    int windowX = -1, windowY = -1;
+
+    // Solo dal file della versione vecchia, convertiti all'avvio (vedi Engine).
+    std::vector<int> legacyDeviceIndices;
 
     static AppSettings load();
-    void save() const;
+    bool save() const;
+
+    // Il contenuto del file (per load/save e per le prove automatiche).
+    static AppSettings parse(const std::string& content);
+    std::string serialize() const;
 };

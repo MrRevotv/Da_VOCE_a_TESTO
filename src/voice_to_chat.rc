@@ -1,0 +1,31 @@
+#include <windows.h>
+
+// Icona del programma (finestra, barra delle applicazioni, file .exe).
+1 ICON "voice_to_chat.ico"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 2,0,0,0
+ PRODUCTVERSION 2,0,0,0
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "041004b0"
+        BEGIN
+            VALUE "FileDescription", "Voice to Chat"
+            VALUE "FileVersion", "2.0.0"
+            VALUE "InternalName", "voice_to_chat"
+            VALUE "OriginalFilename", "voice_to_chat.exe"
+            VALUE "ProductName", "Voice to Chat"
+            VALUE "ProductVersion", "2.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x410, 1200
+    END
+END

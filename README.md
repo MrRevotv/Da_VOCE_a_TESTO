@@ -23,19 +23,40 @@ gioco che accetti input da tastiera simulato.
 
 - **Push-to-talk**: tieni premuto un tasto (mouse, tastiera, o un bottone del
   tuo joystick/HOTAS) mentre parli, rilascialo quando hai finito
-- **Trascrizione locale** (whisper.cpp): converte il parlato in testo, offline
-- **Traduzione contestuale** (un piccolo LLM locale, llama.cpp): non traduce
+- **Trascrizione locale** (whisper.cpp, modello large-v3-turbo): converte il
+  parlato in testo, offline. Un rilevatore di voce gli passa solo i pezzi
+  parlati, così un colpo di tosse o un clic non diventano una frase inventata
+- **Traduzione contestuale** (un LLM locale, llama.cpp): non traduce
   parola per parola, capisce il contesto di gioco — "sono a terra" diventa
   "I'm down", non "I'm on the ground"
+- **Usa la scheda video** (Vulkan) se c'è: traduzione e trascrizione molto
+  più veloci. Senza, funziona sul processore
 - **Scrittura automatica in chat**: apre la chat, scrive il messaggio, e (se
   vuoi) lo invia da solo
 - **Più tasti push-to-talk insieme**: es. un bottone del mouse quando sei a
   piedi, un bottone del joystick quando sei in nave — funzionano entrambi
   senza bisogno di scegliere
-- **Più microfoni insieme**, se ti serve
+- **Più microfoni insieme**, se ti serve: per ogni frase usa quello che ti ha
+  sentito meglio
 - **Glossario personalizzabile**: insegna al programma gergo della community
   che non esiste in nessuna lingua "standard" (es. `QT=quantum travel`)
-- **Tutte le impostazioni si salvano da sole** tra un avvio e l'altro
+- **Vocabolario del videogiocatore**: le sigle e il gergo delle chat di gioco,
+  nei due sensi. Quando parli, col gergo da videogiocatore acceso, "grazie,
+  torno subito" diventa "ty, brb", e "pushiamo, il nabbo sta feeddando"
+  diventa "push, the noob is feeding". Quando leggi la chat, "omw, ty for
+  the help" diventa "sto arrivando, grazie per l'aiuto" (elenco in
+  `src/gamer_slang.cpp`)
+- **Traduzione della chat degli altri**: legge la zona dello schermo con la
+  chat del gioco (OCR di Windows, togliendo lo sfondo dietro le lettere),
+  traduce i messaggi nuovi in inglese (quando due letture di fila coincidono;
+  quelli in altre lingue restano come sono, quelli illeggibili si saltano) e
+  li mostra in un riquadro appena sotto; i messaggi di un canale o di un'organizzazione (es.
+  `[LSE]`) si possono raccogliere in una pagina a parte
+- **Prova senza il gioco**: scrivi una frase nella finestra e vedi subito la
+  traduzione; se parli mentre in primo piano c'è la finestra del programma,
+  il risultato si vede nella cronologia e non viene scritto da nessuna parte
+- **Tutte le impostazioni si salvano da sole** tra un avvio e l'altro (anche
+  quelle della versione precedente vengono lette e convertite)
 
 ## Come si usa
 
@@ -43,26 +64,37 @@ gioco che accetti input da tastiera simulato.
 
 1. Scarica `voice_to_chat.exe` dalla sezione [Releases](../../releases) di
    questo repository (o compilalo tu, vedi sotto)
-2. Eseguilo. Al primo avvio scarica automaticamente i due modelli AI
-   necessari (circa 2.5 GB in totale, richiede una connessione a internet):
+2. Eseguilo. Al primo avvio scarica automaticamente i modelli AI
+   necessari (circa 5.6 GB in totale, richiede una connessione a internet):
    li tiene poi salvati in `%appdata%\VoiceToChat\models\`, quindi succede
    solo la prima volta
-3. Nella finestra:
-   - **Tasto per parlare**: di default è il tasto laterale del mouse. Clicca
-     "+ AGGIUNGI TASTO" per aggiungerne altri (tastiera, mouse o joystick) —
-     premi semplicemente il tasto/bottone che vuoi usare
-   - **Periferiche audio**: seleziona uno o più microfoni, poi "Applica"
-   - **Lingue**: scegli lingua parlata e lingua di traduzione. Se sono
-     uguali, il testo va in chat senza passare dalla traduzione
-   - **Invio automatico**: se attivo, il messaggio viene inviato subito in
-     chat; se disattivo, resta scritto e decidi tu se inviarlo (tasto **F10**
-     per attivarlo/disattivarlo anche mentre giochi)
+3. Nella finestra (le pagine sono nel menu a sinistra):
+   - **Principale**: lingua parlata e lingua di traduzione (se sono uguali,
+     il testo va in chat senza passare dalla traduzione), gergo da
+     videogiocatore, **invio automatico** (se spento il messaggio resta
+     scritto e decidi tu se inviarlo; **F10** lo accende/spegne anche mentre
+     giochi), le ultime frasi e la prova della traduzione
+   - **Tasti e chat**: di default si parla con il tasto laterale del mouse.
+     "+ Aggiungi un tasto" per aggiungerne altri (tastiera, mouse o
+     joystick/HOTAS): premi semplicemente il tasto o il pulsante da usare.
+     Qui si scelgono anche i tasti per aprire la chat e inviare
+   - **Microfono**: uno o più microfoni, volume e soglia del silenzio (con
+     la calibrazione automatica)
+   - **Overlay**: la finestrella di stato sopra il gioco
+   - **Traduzione schermo**: attivala, poi "Scegli la zona" e trascina un
+     rettangolo intorno alla chat del gioco
 4. Tieni premuto il tasto push-to-talk, parla, rilascia. Il messaggio tradotto
    apparirà nella chat del gioco
 
+L'overlay e il riquadro della traduzione si vedono con il gioco in finestra o
+in "finestra senza bordi" (in schermo intero esclusivo Windows non mostra
+nulla sopra il gioco). Se il gioco gira come amministratore, avvia anche
+Voice to Chat come amministratore: Windows non lascia scrivere in un
+programma con più permessi.
+
 ### Personalizzare il glossario
 
-Clicca "APRI GLOSSARIO PERSONALIZZATO": si apre un file di testo
+Clicca "Apri il glossario" nella pagina Principale: si apre un file di testo
 (`%appdata%\VoiceToChat\glossary.txt`). Aggiungi una riga per ogni termine:
 
 ```
@@ -78,10 +110,9 @@ pronto, o vuoi contribuire al progetto, tutte le istruzioni dettagliate
 (dipendenze da clonare, configurazione CMake, risoluzione dei problemi più
 comuni) sono in [`BUILDING.md`](BUILDING.md).
 
-In breve: Windows + Visual Studio (componente "Sviluppo di applicazioni
-desktop con C++") + CMake + Git, poi clone di whisper.cpp/llama.cpp/miniaudio,
-apertura della cartella in Visual Studio, compilazione in configurazione
-Release.
+In breve: Windows + Visual Studio o Build Tools (componente "Sviluppo di
+applicazioni desktop con C++") + Git + Vulkan SDK, poi clone di
+whisper.cpp/llama.cpp/miniaudio e doppio clic su `compila.bat`.
 
 ## Come funziona sotto il cofano
 
@@ -110,8 +141,9 @@ il lavoro pesante dietro le quinte:
 - [whisper.cpp](https://github.com/ggml-org/whisper.cpp) — trascrizione vocale
 - [llama.cpp](https://github.com/ggml-org/llama.cpp) — inferenza dell'LLM
 - [miniaudio](https://github.com/mackron/miniaudio) — cattura audio
-- [Qwen2.5](https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF) (Alibaba) —
-  il modello linguistico usato per la traduzione
+- [Qwen2.5 7B Instruct](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct) (Alibaba) —
+  il modello linguistico usato per la traduzione (in GGUF da
+  [bartowski](https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF))
 
 ## Avvertenze importanti — leggi prima di usarlo
 

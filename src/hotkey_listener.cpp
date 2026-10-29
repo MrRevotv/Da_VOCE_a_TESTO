@@ -1,134 +1,156 @@
 #include "hotkey_listener.h"
 #include "joystick_input.h"
+#include "text_utils.h"
 
 #include <windows.h>
 #include <chrono>
-#include <unordered_map>
-
-HotkeyListener::HotkeyListener() {
-}
+#include <map>
 
 HotkeyListener::~HotkeyListener() {
     stop();
 }
 
-void HotkeyListener::setOnTalkStart(std::function<void()> callback) {
-    m_onTalkStart = std::move(callback);
+void HotkeyListener::registerToggleKey(int vk, std::function<void()> cb) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_toggles.push_back({ vk, false, std::move(cb) });
 }
 
-void HotkeyListener::setOnTalkStop(std::function<void()> callback) {
-    m_onTalkStop = std::move(callback);
-}
-
-void HotkeyListener::registerToggleKey(int virtualKey, std::function<void()> callback) {
-    m_toggleKeys.push_back({ virtualKey, false, std::move(callback) });
-}
-
-void HotkeyListener::addTalkTrigger(const TalkTrigger& trigger) {
-    std::lock_guard<std::mutex> lock(m_triggersMutex);
-    m_talkTriggers.push_back(trigger);
-}
-
-void HotkeyListener::removeTalkTrigger(size_t index) {
-    std::lock_guard<std::mutex> lock(m_triggersMutex);
-    if (index < m_talkTriggers.size()) m_talkTriggers.erase(m_talkTriggers.begin() + index);
+void HotkeyListener::setTalkTriggers(const std::vector<TalkTrigger>& triggers) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_triggers = triggers;
 }
 
 std::vector<TalkTrigger> HotkeyListener::getTalkTriggers() {
-    std::lock_guard<std::mutex> lock(m_triggersMutex);
-    return m_talkTriggers;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_triggers;
 }
 
-namespace {
-    // Nomi leggibili per i tasti/bottoni mouse più comuni; per gli altri
-    // tasti di tastiera mostriamo semplicemente il codice virtuale.
-    std::string keyboardVkName(int vk) {
-        switch (vk) {
-            case VK_LBUTTON:  return "tasto sinistro del mouse";
-            case VK_RBUTTON:  return "tasto destro del mouse";
-            case VK_MBUTTON:  return "tasto centrale del mouse";
-            case VK_XBUTTON1: return "tasto laterale mouse (indietro)";
-            case VK_XBUTTON2: return "tasto laterale mouse (avanti)";
-            case VK_RETURN:   return "Invio";
-            case VK_ESCAPE:   return "Esc";
-            case VK_SPACE:    return "Spazio";
-            case VK_TAB:      return "Tab";
-            case VK_CAPITAL:  return "Blocco Maiuscole";
+bool HotkeyListener::isAnyTalkTriggerDown() {
+    std::vector<TalkTrigger> triggers = getTalkTriggers();
+    for (const auto& t : triggers) {
+        if (t.type == TalkTrigger::Type::Keyboard) {
+            if (GetAsyncKeyState(t.vk) & 0x8000) return true;
+        } else if (JoystickInput::isButtonDown(t.joystickId, t.buttonIndex)) {
+            return true;
         }
-        if (vk >= 'A' && vk <= 'Z') return std::string(1, (char)vk);
-        if (vk >= VK_F1 && vk <= VK_F24) return "F" + std::to_string(vk - VK_F1 + 1);
-        return "tasto (codice " + std::to_string(vk) + ")";
     }
+    return false;
 }
 
-std::string HotkeyListener::describeTrigger(const TalkTrigger& trigger) {
-    if (trigger.type == TalkTrigger::Type::Keyboard) {
-        return "Tastiera/Mouse: " + keyboardVkName(trigger.vk);
+std::string HotkeyListener::keyName(int vk) {
+    switch (vk) {
+    case VK_LBUTTON: return "tasto sinistro del mouse";
+    case VK_RBUTTON: return "tasto destro del mouse";
+    case VK_MBUTTON: return "tasto centrale del mouse (rotellina)";
+    case VK_XBUTTON1: return "tasto laterale del mouse (indietro)";
+    case VK_XBUTTON2: return "tasto laterale del mouse (avanti)";
+    case VK_RETURN: return "Invio";
+    case VK_ESCAPE: return "Esc";
+    case VK_SPACE: return "Spazio";
+    case VK_TAB: return "Tab";
+    case VK_CAPITAL: return "Bloc Maiusc";
+    case VK_SHIFT: return "Shift";
+    case VK_LSHIFT: return "Shift sinistro";
+    case VK_RSHIFT: return "Shift destro";
+    case VK_CONTROL: return "Ctrl";
+    case VK_LCONTROL: return "Ctrl sinistro";
+    case VK_RCONTROL: return "Ctrl destro";
+    case VK_MENU: return "Alt";
+    case VK_LMENU: return "Alt sinistro";
+    case VK_RMENU: return "Alt Gr";
+    case VK_BACK: return "Backspace";
+    case VK_DELETE: return "Canc";
+    case VK_INSERT: return "Ins";
+    case VK_HOME: return "Home";
+    case VK_END: return "Fine";
+    case VK_PRIOR: return "Pagina su";
+    case VK_NEXT: return "Pagina giù";
+    case VK_UP: return "Freccia su";
+    case VK_DOWN: return "Freccia giù";
+    case VK_LEFT: return "Freccia sinistra";
+    case VK_RIGHT: return "Freccia destra";
+    case VK_NUMLOCK: return "Bloc Num";
+    case VK_SCROLL: return "Bloc Scorr";
+    case VK_PAUSE: return "Pausa";
     }
-    return "Joystick " + std::to_string(trigger.joystickId + 1) +
-           ": bottone " + std::to_string(trigger.buttonIndex + 1);
+    if (vk >= VK_F1 && vk <= VK_F24) return "F" + std::to_string(vk - VK_F1 + 1);
+    if (vk >= VK_NUMPAD0 && vk <= VK_NUMPAD9) return "Tastierino " + std::to_string(vk - VK_NUMPAD0);
+    // Gli altri: il nome che dà Windows per la tastiera in uso (es. "Ò", "+").
+    UINT sc = MapVirtualKeyW((UINT)vk, MAPVK_VK_TO_VSC_EX);
+    if (sc) {
+        LONG lparam = (LONG)((sc & 0xFF) << 16);
+        if ((sc & 0xFF00) == 0xE000) lparam |= 1 << 24;
+        wchar_t name[64] = {};
+        if (GetKeyNameTextW(lparam, name, 64) > 0) return TextUtils::wideToUtf8(name);
+    }
+    return "tasto " + std::to_string(vk);
 }
 
-bool HotkeyListener::captureNextInput(TalkTrigger& outTrigger, std::atomic<bool>& cancel, int timeoutMs) {
-    // Stato iniziale: registriamo cosa è già premuto ORA, per reagire solo a
-    // una NUOVA pressione (fronte di salita), non a un tasto già tenuto giù
-    // (es. il click del mouse che ha attivato il pulsante "Aggiungi tasto").
-    std::unordered_map<int, bool> keyboardWasDown;
-    for (int vk = 1; vk < 255; ++vk) {
-        keyboardWasDown[vk] = (GetAsyncKeyState(vk) & 0x8000) != 0;
-    }
+std::string HotkeyListener::describeTrigger(const TalkTrigger& t) {
+    if (t.type == TalkTrigger::Type::Keyboard) return keyName(t.vk);
+    std::string name = t.joystickName.empty() ? JoystickInput::nameOf(t.joystickId) : t.joystickName;
+    if (name.empty()) name = "Joystick";
+    return name + ": pulsante " + std::to_string(t.buttonIndex + 1);
+}
 
-    auto joysticks = JoystickInput::enumerate();
-    std::unordered_map<long long, bool> joystickWasDown; // chiave: id*1000+bottone
-
-    auto joyKey = [](int id, int btn) { return (long long)id * 1000 + btn; };
-    for (const auto& joy : joysticks) {
-        for (int b = 0; b < joy.buttonCount; ++b) {
-            joystickWasDown[joyKey(joy.id, b)] = JoystickInput::isButtonDown(joy.id, b);
-        }
-    }
-
-    auto start = std::chrono::steady_clock::now();
-
-    while (!cancel.load()) {
-        if (std::chrono::steady_clock::now() - start > std::chrono::milliseconds(timeoutMs)) {
-            return false;
-        }
-
-        for (int vk = 1; vk < 255; ++vk) {
-            bool down = (GetAsyncKeyState(vk) & 0x8000) != 0;
-            if (down && !keyboardWasDown[vk]) {
-                outTrigger.type = TalkTrigger::Type::Keyboard;
-                outTrigger.vk = vk;
-                return true;
-            }
-            keyboardWasDown[vk] = down;
-        }
-
-        for (const auto& joy : joysticks) {
-            for (int b = 0; b < joy.buttonCount; ++b) {
-                bool down = JoystickInput::isButtonDown(joy.id, b);
-                long long key = joyKey(joy.id, b);
-                if (down && !joystickWasDown[key]) {
-                    outTrigger.type = TalkTrigger::Type::Joystick;
-                    outTrigger.joystickId = joy.id;
-                    outTrigger.buttonIndex = b;
+bool HotkeyListener::captureNextInput(TalkTrigger& out, std::atomic<bool>& cancel, int timeoutMs, bool allowJoystick) {
+    bool keyWasDown[256] = {};
+    for (int vk = 1; vk < 256; ++vk) keyWasDown[vk] = (GetAsyncKeyState(vk) & 0x8000) != 0;
+    std::map<std::string, std::vector<bool>> joyWasDown;
+    // Lo stato dei joystick lo aggiorna il thread di ascolto (sempre acceso,
+    // anche quando il push-to-talk è sospeso per la scelta del tasto).
+    auto snapshot = [&](bool initial) -> bool {
+        for (const auto& j : JoystickInput::devices()) {
+            auto& prev = joyWasDown[j.id];
+            if (prev.size() < (size_t)j.buttonCount) prev.resize(j.buttonCount, initial);
+            for (int b = 0; b < j.buttonCount; ++b) {
+                bool down = JoystickInput::isButtonDown(j.id, b);
+                if (!initial && down && !prev[b]) {
+                    out = TalkTrigger{};
+                    out.type = TalkTrigger::Type::Joystick;
+                    out.joystickId = j.id;
+                    out.joystickName = j.name;
+                    out.buttonIndex = b;
                     return true;
                 }
-                joystickWasDown[key] = down;
+                prev[b] = down;
             }
         }
+        return false;
+    };
+    if (allowJoystick) snapshot(true);
 
+    auto start = std::chrono::steady_clock::now();
+    while (!cancel.load()) {
+        if (std::chrono::steady_clock::now() - start > std::chrono::milliseconds(timeoutMs)) return false;
+        for (int vk = 1; vk < 256; ++vk) {
+            bool down = (GetAsyncKeyState(vk) & 0x8000) != 0;
+            if (down && !keyWasDown[vk]) {
+                if (vk == VK_ESCAPE) return false;
+                // Shift/Ctrl/Alt generici: preferiamo la versione destra/sinistra
+                // (arriva nello stesso giro, con un codice più alto).
+                bool generic = vk == VK_SHIFT || vk == VK_CONTROL || vk == VK_MENU;
+                // Per i tasti della chat (allowJoystick=false) serve la tastiera, non il mouse.
+                bool mouse = vk == VK_RBUTTON || vk == VK_MBUTTON || vk == VK_XBUTTON1 || vk == VK_XBUTTON2;
+                if (vk != VK_LBUTTON && !generic && (allowJoystick || !mouse)) {
+                    out = TalkTrigger{};
+                    out.type = TalkTrigger::Type::Keyboard;
+                    out.vk = vk;
+                    return true;
+                }
+            }
+            keyWasDown[vk] = down;
+        }
+        if (allowJoystick && snapshot(false)) return true;
         std::this_thread::sleep_for(std::chrono::milliseconds(15));
     }
-
     return false;
 }
 
 void HotkeyListener::start() {
     if (m_running) return;
     m_running = true;
-    m_thread = std::thread(&HotkeyListener::pollLoop, this);
+    m_thread = std::thread(&HotkeyListener::loop, this);
 }
 
 void HotkeyListener::stop() {
@@ -136,38 +158,33 @@ void HotkeyListener::stop() {
     if (m_thread.joinable()) m_thread.join();
 }
 
-bool HotkeyListener::isAnyTalkTriggerDown() {
-    std::lock_guard<std::mutex> lock(m_triggersMutex);
-    for (const auto& trigger : m_talkTriggers) {
-        if (trigger.type == TalkTrigger::Type::Keyboard) {
-            if (GetAsyncKeyState(trigger.vk) & 0x8000) return true;
-        } else {
-            if (JoystickInput::isButtonDown(trigger.joystickId, trigger.buttonIndex)) return true;
-        }
-    }
-    return false;
-}
-
-void HotkeyListener::pollLoop() {
-    // Polling ogni ~10ms: reattivo abbastanza per il parlato, leggero per la CPU.
+void HotkeyListener::loop() {
     while (m_running) {
-        bool anyDown = isAnyTalkTriggerDown();
-
-        if (anyDown && !m_wasAnyTalkDown) {
+        JoystickInput::poll();
+        bool down = !m_paused && isAnyTalkTriggerDown();
+        if (m_waitRelease) {
+            if (down) down = false; // ancora premuto da prima della pausa: non conta
+            else m_waitRelease = false;
+        }
+        if (down && !m_wasDown) {
             if (m_onTalkStart) m_onTalkStart();
-        } else if (!anyDown && m_wasAnyTalkDown) {
+        } else if (!down && m_wasDown) {
             if (m_onTalkStop) m_onTalkStop();
         }
-        m_wasAnyTalkDown = anyDown;
+        m_wasDown = down;
 
-        for (auto& toggle : m_toggleKeys) {
-            bool down = (GetAsyncKeyState(toggle.virtualKey) & 0x8000) != 0;
-            if (down && !toggle.wasDown) {
-                if (toggle.callback) toggle.callback();
+        std::vector<std::function<void()>> fire;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            for (auto& t : m_toggles) {
+                bool tDown = (GetAsyncKeyState(t.vk) & 0x8000) != 0;
+                if (tDown && !t.wasDown && !m_paused) fire.push_back(t.callback);
+                t.wasDown = tDown;
             }
-            toggle.wasDown = down;
         }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        for (auto& f : fire) if (f) f();
+        std::this_thread::sleep_for(std::chrono::milliseconds(8));
     }
+    if (m_wasDown && m_onTalkStop) m_onTalkStop();
+    m_wasDown = false;
 }

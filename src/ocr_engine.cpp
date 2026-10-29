@@ -1,133 +1,173 @@
 #include "ocr_engine.h"
-#include "languages.h"
+#include "log.h"
+#include "text_utils.h"
 
 #include <windows.h>
-#include <cstring>
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
-#include <winrt/Windows.Storage.Streams.h>
+#include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.Globalization.h>
 #include <winrt/Windows.Graphics.Imaging.h>
 #include <winrt/Windows.Media.Ocr.h>
-#include <winrt/Windows.Globalization.h>
+#include <winrt/Windows.Storage.Streams.h>
 
-using namespace winrt::Windows::Storage::Streams;
+#include <algorithm>
+#include <cmath>
+#include <map>
+#include <mutex>
+
+using namespace winrt::Windows::Globalization;
 using namespace winrt::Windows::Graphics::Imaging;
 using namespace winrt::Windows::Media::Ocr;
-using namespace winrt::Windows::Globalization;
+using namespace winrt::Windows::Storage::Streams;
 
 namespace {
-    bool g_apartmentInitialized = false;
+    std::mutex g_mutex;
+    std::map<std::string, OcrEngine> g_engines; // uno per lingua, creato una volta
 
+    // C++/WinRT vuole un "apartment" sul thread che lo usa. Se il thread ne
+    // ha già uno (per esempio quello della finestra), va bene così.
     void ensureApartment() {
-        if (!g_apartmentInitialized) {
+        thread_local bool done = false;
+        if (done) return;
+        try {
             winrt::init_apartment(winrt::apartment_type::multi_threaded);
-            g_apartmentInitialized = true;
+        } catch (...) {
         }
+        done = true;
     }
 
-    std::string wideToUtf8(const std::wstring& wide) {
-        if (wide.empty()) return {};
-        int size = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), -1, nullptr, 0, nullptr, nullptr);
-        if (size <= 0) return {};
-        std::string result(size - 1, '\0');
-        WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), -1, result.data(), size, nullptr, nullptr);
-        return result;
-    }
-
-    // Esegue l'OCR con un motore già pronto: fattorizzato perché sia
-    // recognizeText che recognizeTextAutoDetect condividono questa parte.
-    std::string runOcr(const OcrEngine& engine, const std::vector<uint8_t>& pixelDataBgra,
-                        int width, int height) {
-        DataWriter writer;
-        writer.WriteBytes(winrt::array_view<const uint8_t>(pixelDataBgra.data(),
-            pixelDataBgra.data() + pixelDataBgra.size()));
-        IBuffer buffer = writer.DetachBuffer();
-
-        SoftwareBitmap bitmap = SoftwareBitmap::CreateCopyFromBuffer(
-            buffer, BitmapPixelFormat::Bgra8, width, height);
-
-        OcrResult result = engine.RecognizeAsync(bitmap).get();
-        if (!result) return "";
-
-        return wideToUtf8(result.Text().c_str());
+    OcrEngine engineFor(const std::string& code) {
+        auto it = g_engines.find(code);
+        if (it != g_engines.end()) return it->second;
+        OcrEngine engine = nullptr;
+        try {
+            if (!code.empty()) {
+                Language lang(TextUtils::utf8ToWide(code));
+                if (OcrEngine::IsLanguageSupported(lang)) engine = OcrEngine::TryCreateFromLanguage(lang);
+            }
+            if (!engine) engine = OcrEngine::TryCreateFromUserProfileLanguages();
+        } catch (...) {
+            engine = nullptr;
+        }
+        if (engine) {
+            g_engines.emplace(code, engine);
+            Log::info("OCR: motore per \"" + code + "\" = " + TextUtils::wideToUtf8(engine.RecognizerLanguage().LanguageTag().c_str()));
+        }
+        return engine;
     }
 }
 
 namespace OcrEngineWrapper {
 
-std::string recognizeText(const std::string& languageCode,
-                           const std::vector<uint8_t>& pixelDataBgra,
-                           int width, int height) {
-    if (pixelDataBgra.empty() || width <= 0 || height <= 0) return "";
-
+std::vector<std::string> installedLanguages() {
+    std::vector<std::string> result;
+    ensureApartment();
     try {
-        ensureApartment();
-
-        std::wstring wlang(languageCode.begin(), languageCode.end());
-        Language lang(wlang);
-
-        OcrEngine engine = nullptr;
-        if (OcrEngine::IsLanguageSupported(lang)) {
-            engine = OcrEngine::TryCreateFromLanguage(lang);
+        for (const Language& lang : OcrEngine::AvailableRecognizerLanguages()) {
+            result.push_back(TextUtils::wideToUtf8(lang.LanguageTag().c_str()));
         }
-        if (!engine) {
-            // Ripiego: lingue del profilo utente (spesso include l'italiano
-            // e l'inglese di default su un sistema in italiano).
-            engine = OcrEngine::TryCreateFromUserProfileLanguages();
-        }
-        if (!engine) return ""; // pacchetto lingua OCR non installato
-
-        return runOcr(engine, pixelDataBgra, width, height);
     } catch (...) {
-        // Qualunque eccezione WinRT (lingua non disponibile, immagine non
-        // valida, ecc.): meglio restituire stringa vuota che far crashare
-        // il programma per un problema dell'OCR.
-        return "";
+    }
+    return result;
+}
+
+bool isLanguageSupported(const std::string& code) {
+    ensureApartment();
+    try {
+        return OcrEngine::IsLanguageSupported(Language(TextUtils::utf8ToWide(code)));
+    } catch (...) {
+        return false;
     }
 }
 
-std::string recognizeTextAutoDetect(const std::vector<uint8_t>& pixelDataBgra,
-                                     int width, int height,
-                                     std::string& detectedLanguageCode) {
-    detectedLanguageCode.clear();
-    if (pixelDataBgra.empty() || width <= 0 || height <= 0) return "";
-
+int maxImageDimension() {
+    ensureApartment();
     try {
-        ensureApartment();
+        return (int)OcrEngine::MaxImageDimension();
+    } catch (...) {
+        return 2600;
+    }
+}
 
-        std::string bestText;
-        std::string bestLangCode;
+std::vector<Line> recognize(const std::string& languageCode, const ScreenCapture::Image& image, std::string& error) {
+    std::vector<Line> raw;
+    if (image.empty()) { error = "immagine vuota"; return raw; }
+    ensureApartment();
+    std::lock_guard<std::mutex> lock(g_mutex);
+    try {
+        OcrEngine engine = engineFor(languageCode);
+        if (!engine) {
+            error = "nessuna lingua OCR installata in Windows";
+            return raw;
+        }
+        DataWriter writer;
+        writer.WriteBytes(winrt::array_view<const uint8_t>(image.pixels.data(), image.pixels.data() + image.pixels.size()));
+        SoftwareBitmap bitmap = SoftwareBitmap::CreateCopyFromBuffer(writer.DetachBuffer(), BitmapPixelFormat::Bgra8, image.width, image.height);
+        OcrResult result = engine.RecognizeAsync(bitmap).get();
+        if (!result) return raw;
 
-        // Proviamo l'OCR con ognuna delle lingue che gestiamo noi (vedi
-        // languages.h), non con l'elenco completo installato in Windows:
-        // quella collezione (IVectorView<Language>) causa un errore di
-        // compilazione su questo SDK/compilatore. Dato che comunque
-        // supportiamo solo queste 12 lingue nel resto del programma, non
-        // perdiamo nulla in pratica.
-        for (const auto& candidate : supportedLanguages()) {
-            std::wstring wlang(candidate.whisperCode, candidate.whisperCode + strlen(candidate.whisperCode));
-            Language lang(wlang);
+        for (const auto& line : result.Lines()) {
+            Line l;
+            float left = 1e9f, top = 1e9f, right = -1e9f, bottom = -1e9f;
+            std::string text;
+            for (const auto& word : line.Words()) {
+                auto r = word.BoundingRect();
+                left = std::min(left, r.X);
+                top = std::min(top, r.Y);
+                right = std::max(right, r.X + r.Width);
+                bottom = std::max(bottom, r.Y + r.Height);
+                if (!text.empty()) text += ' ';
+                text += TextUtils::wideToUtf8(word.Text().c_str());
+            }
+            if (text.empty()) continue;
+            l.text = text;
+            l.x = (int)left;
+            l.y = (int)top;
+            l.width = (int)(right - left);
+            l.height = (int)(bottom - top);
+            raw.push_back(l);
+        }
+    } catch (const winrt::hresult_error& e) {
+        error = "OCR: " + TextUtils::wideToUtf8(e.message().c_str());
+        return {};
+    } catch (...) {
+        error = "OCR non riuscito";
+        return {};
+    }
 
-            if (!OcrEngine::IsLanguageSupported(lang)) continue; // non installata su questo PC
-
-            OcrEngine engine = OcrEngine::TryCreateFromLanguage(lang);
-            if (!engine) continue;
-
-            std::string text = runOcr(engine, pixelDataBgra, width, height);
-
-            // Approssimazione pratica di "quale lingua ha funzionato meglio":
-            // quella che ha riconosciuto più caratteri di testo.
-            if (text.size() > bestText.size()) {
-                bestText = text;
-                bestLangCode = candidate.whisperCode;
+    // Righe sulla stessa "altezza" (il centro verticale entro mezza riga)
+    // sono la stessa riga dello schermo: si uniscono, da sinistra a destra.
+    std::sort(raw.begin(), raw.end(), [](const Line& a, const Line& b) { return a.y + a.height / 2 < b.y + b.height / 2; });
+    std::vector<Line> merged;
+    for (const Line& l : raw) {
+        if (!merged.empty()) {
+            Line& prev = merged.back();
+            int prevCenter = prev.y + prev.height / 2, center = l.y + l.height / 2;
+            int tolerance = std::max(4, std::min(prev.height, l.height) / 2);
+            if (std::abs(center - prevCenter) <= tolerance) {
+                bool after = l.x >= prev.x;
+                prev.text = after ? prev.text + " " + l.text : l.text + " " + prev.text;
+                int right = std::max(prev.x + prev.width, l.x + l.width), bottom = std::max(prev.y + prev.height, l.y + l.height);
+                prev.x = std::min(prev.x, l.x);
+                prev.y = std::min(prev.y, l.y);
+                prev.width = right - prev.x;
+                prev.height = bottom - prev.y;
+                continue;
             }
         }
-
-        detectedLanguageCode = bestLangCode;
-        return bestText;
-    } catch (...) {
-        return "";
+        merged.push_back(l);
     }
+    return merged;
+}
+
+std::string joinLines(const std::vector<Line>& lines) {
+    std::string out;
+    for (const auto& l : lines) {
+        if (!out.empty()) out += '\n';
+        out += l.text;
+    }
+    return out;
 }
 
 } // namespace OcrEngineWrapper

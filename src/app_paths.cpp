@@ -1,66 +1,65 @@
 #include "app_paths.h"
+#include "text_utils.h"
+
 #include <windows.h>
-#include <cstdlib>
+#include <shlobj.h>
 
 namespace {
-    std::wstring getAppDataRoot() {
-        wchar_t* buf = nullptr;
-        size_t len = 0;
+    std::wstring appDataRoot() {
+        PWSTR path = nullptr;
         std::wstring result;
-
-        // %APPDATA% è una variabile d'ambiente standard di Windows, sempre
-        // presente: punta a "C:\Users\<utente>\AppData\Roaming".
-        if (_wdupenv_s(&buf, &len, L"APPDATA") == 0 && buf != nullptr) {
-            result = buf;
-            free(buf);
+        if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &path)) && path) {
+            result = path;
         }
+        CoTaskMemFree(path);
         return result;
+    }
+
+    std::wstring g_dataDirOverride;
+
+    bool isAscii(const std::wstring& s) {
+        for (wchar_t c : s) if (c > 127) return false;
+        return true;
     }
 }
 
 namespace AppPaths {
 
-    std::wstring getAppDataDir() {
-        return getAppDataRoot() + L"\\VoiceToChat";
-    }
+    std::wstring getAppDataDir() { return g_dataDirOverride.empty() ? appDataRoot() + L"\\VoiceToChat" : g_dataDirOverride; }
+    std::wstring getModelsDir() { return appDataRoot() + L"\\VoiceToChat\\models"; }
 
-    std::wstring getModelsDir() {
-        return getAppDataDir() + L"\\models";
+    void setDataDirOverride(const std::wstring& dir) {
+        g_dataDirOverride = dir;
+        while (!g_dataDirOverride.empty() && (g_dataDirOverride.back() == L'\\' || g_dataDirOverride.back() == L'/')) {
+            g_dataDirOverride.pop_back();
+        }
     }
 
     bool ensureDirectoriesExist() {
-        std::wstring appDir = getAppDataDir();
-        std::wstring modelsDir = getModelsDir();
-
-        if (!CreateDirectoryW(appDir.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) {
-            return false;
-        }
-        if (!CreateDirectoryW(modelsDir.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) {
-            return false;
+        for (const std::wstring& dir : { appDataRoot() + L"\\VoiceToChat", getAppDataDir(), getModelsDir() }) {
+            if (!CreateDirectoryW(dir.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) return false;
         }
         return true;
     }
 
-    std::wstring whisperModelPath() {
-        return getModelsDir() + L"\\ggml-small.bin";
-    }
+    std::wstring whisperModelPath() { return getModelsDir() + L"\\ggml-large-v3-turbo-q8_0.bin"; }
+    std::wstring vadModelPath() { return getModelsDir() + L"\\ggml-silero-v6.2.0.bin"; }
+    std::wstring llmModelPath() { return getModelsDir() + L"\\Qwen2.5-7B-Instruct-Q4_K_M.gguf"; }
+    std::wstring settingsPath() { return getAppDataDir() + L"\\settings.cfg"; }
+    std::wstring glossaryPath() { return getAppDataDir() + L"\\glossary.txt"; }
+    std::wstring logPath() { return getAppDataDir() + L"\\log.txt"; }
+    std::wstring ocrDebugPath() { return getAppDataDir() + L"\\debug_ocr.txt"; }
 
-    std::wstring llmModelPath() {
-        return getModelsDir() + L"\\qwen2.5-3b-instruct-q4_k_m.gguf";
-    }
-
-    std::string toNarrowPath(const std::wstring& widePath) {
-        if (widePath.empty()) return {};
-
-        int size = WideCharToMultiByte(CP_ACP, 0, widePath.c_str(), -1, nullptr, 0, nullptr, nullptr);
-        if (size <= 0) return {};
-
-        std::string result(size, '\0');
-        WideCharToMultiByte(CP_ACP, 0, widePath.c_str(), -1, result.data(), size, nullptr, nullptr);
-
-        // Rimuove il terminatore nullo extra che WideCharToMultiByte include nel conteggio.
-        if (!result.empty() && result.back() == '\0') result.pop_back();
-        return result;
+    std::string toLibraryPath(const std::wstring& widePath) {
+        if (isAscii(widePath)) return TextUtils::wideToUtf8(widePath);
+        DWORD len = GetShortPathNameW(widePath.c_str(), nullptr, 0);
+        if (len > 0) {
+            std::wstring shortPath(len, L'\0');
+            DWORD written = GetShortPathNameW(widePath.c_str(), shortPath.data(), len);
+            shortPath.resize(written);
+            if (written > 0 && isAscii(shortPath)) return TextUtils::wideToUtf8(shortPath);
+        }
+        return TextUtils::wideToUtf8(widePath);
     }
 
 } // namespace AppPaths

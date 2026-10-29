@@ -1,30 +1,33 @@
 #pragma once
 
+#include <atomic>
+#include <mutex>
 #include <string>
 #include <vector>
 
-// Wrapper su whisper.cpp: carica il modello una volta e trascrive buffer
-// audio (float32, mono, 16kHz) in testo. Nasconde il puntatore whisper_context
-// dietro void* per non dover includere whisper.h in questo header.
+// Wrapper su whisper.cpp: carica il modello una volta e trascrive audio
+// (float32, mono, 16 kHz). Thread-safe: una trascrizione alla volta.
 class WhisperEngine {
 public:
-    WhisperEngine();
+    WhisperEngine() = default;
     ~WhisperEngine();
+    WhisperEngine(const WhisperEngine&) = delete;
+    WhisperEngine& operator=(const WhisperEngine&) = delete;
 
-    // modelPath: es. "models/ggml-small.bin"
-    bool init(const std::string& modelPath, bool useGpu = true);
+    // vadModelPath: il rilevatore di voce (Silero); vuoto = senza (trascrive tutto l'audio).
+    bool init(const std::string& modelPath, const std::string& vadModelPath, int threads);
+    bool isReady() const { return m_ready.load(); }
 
-    // sourceLanguageCode: codice whisper della lingua parlata (es. "it", "en").
-    // La traduzione vera e propria (verso la lingua di destinazione scelta
-    // dall'utente) la fa l'LLM altrove: qui trascriviamo sempre nella lingua
-    // originale.
-    // initialPrompt (opzionale): testo "di contesto" che Whisper legge prima
-    // dell'audio, utile per fargli riconoscere meglio nomi propri o gergo
-    // specifico (es. i nomi dei luoghi di Star Citizen) invece di scartarli.
-    std::string transcribe(const std::vector<float>& samples,
-                            const std::string& sourceLanguageCode,
-                            const std::string& initialPrompt = "");
+    // languageCode: lingua parlata (es. "it"). hint: nomi propri e gergo da
+    // aiutare a riconoscere (non compaiono nel testo). Ritorna il testo già
+    // ripulito, o stringa vuota se non c'era parlato vero (silenzio, rumore,
+    // o una delle frasi che whisper inventa sul silenzio).
+    std::string transcribe(const std::vector<float>& samples, const std::string& languageCode, const std::string& hint);
 
 private:
+    std::mutex m_mutex;
+    std::atomic<bool> m_ready{ false };
     void* m_ctx = nullptr; // whisper_context*
+    std::string m_vadPath;
+    int m_threads = 4;
 };

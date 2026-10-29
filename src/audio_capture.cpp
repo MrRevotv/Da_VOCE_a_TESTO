@@ -1,197 +1,186 @@
 #include "audio_capture.h"
+#include "log.h"
+#include "speech_utils.h"
 
 #define MINIAUDIO_IMPLEMENTATION
+#define MA_NO_ENCODING
+#define MA_NO_DECODING
+#define MA_NO_GENERATION
 #include "miniaudio.h"
 
-#include <cstring>
 #include <algorithm>
 #include <cmath>
 
 namespace {
-    // Contesto usato ovunque serva enumerare/aprire periferiche: uno per
-    // tutta la vita del processo è sufficiente e più semplice da gestire.
-    struct DeviceUserData {
+    constexpr size_t kPreRollSamples = AudioCapture::kSampleRate * 4 / 10; // 0,4 s
+    constexpr size_t kMaxRecordingSamples = (size_t)AudioCapture::kSampleRate * 120; // 2 minuti al massimo
+
+    struct CallbackData {
         AudioCapture* self;
-        int slot; // indice nel vettore m_perDeviceBuffers di AudioCapture
+        int slot;
     };
 
-    void dataCallback(ma_device* pDevice, void* /*pOutput*/, const void* pInput, ma_uint32 frameCount) {
-        auto* userData = static_cast<DeviceUserData*>(pDevice->pUserData);
-        userData->self->onAudioData(userData->slot, static_cast<const float*>(pInput), frameCount);
+    void dataCallback(ma_device* device, void*, const void* input, ma_uint32 frameCount) {
+        auto* data = static_cast<CallbackData*>(device->pUserData);
+        data->self->onAudioData(data->slot, static_cast<const float*>(input), frameCount);
     }
 }
 
-AudioCapture::AudioCapture() {
-}
+AudioCapture::AudioCapture() = default;
 
 AudioCapture::~AudioCapture() {
-    closeDevices();
-}
-
-void AudioCapture::closeDevices() {
-    for (void* devPtr : m_devices) {
-        auto* device = static_cast<ma_device*>(devPtr);
-        // Il DeviceUserData è stato allocato in init(): lo liberiamo insieme al device.
-        delete static_cast<DeviceUserData*>(device->pUserData);
-        ma_device_uninit(device);
-        delete device;
-    }
-    m_devices.clear();
-
-    // Il contesto va distrutto DOPO tutti i device che lo usano (mai prima:
-    // i device conservano riferimenti interni al contesto per tutta la loro
-    // vita, distruggerlo troppo presto causa un crash nel thread audio).
-    if (m_context) {
-        auto* context = static_cast<ma_context*>(m_context);
-        ma_context_uninit(context);
-        delete context;
-        m_context = nullptr;
-    }
+    close();
 }
 
 std::vector<AudioDeviceInfo> AudioCapture::listCaptureDevices() {
     std::vector<AudioDeviceInfo> result;
-
     ma_context context;
-    if (ma_context_init(nullptr, 0, nullptr, &context) != MA_SUCCESS) {
-        return result;
+    if (ma_context_init(nullptr, 0, nullptr, &context) != MA_SUCCESS) return result;
+    ma_device_info* infos = nullptr;
+    ma_uint32 count = 0;
+    if (ma_context_get_devices(&context, nullptr, nullptr, &infos, &count) == MA_SUCCESS) {
+        for (ma_uint32 i = 0; i < count; ++i) result.push_back({ (int)i, infos[i].name });
     }
-
-    ma_device_info* captureInfos = nullptr;
-    ma_uint32 captureCount = 0;
-    if (ma_context_get_devices(&context, nullptr, nullptr, &captureInfos, &captureCount) == MA_SUCCESS) {
-        for (ma_uint32 i = 0; i < captureCount; ++i) {
-            result.push_back({ static_cast<int>(i), captureInfos[i].name });
-        }
-    }
-
     ma_context_uninit(&context);
     return result;
 }
 
-bool AudioCapture::init(const std::vector<int>& deviceIndices) {
-    closeDevices(); // chiude eventuali device/contesto di una init() precedente
+void AudioCapture::close() {
+    // I device si fermano prima di toccare i buffer: dopo ma_device_uninit la
+    // callback non viene più chiamata.
+    for (void* d : m_devices) {
+        ma_device_uninit(static_cast<ma_device*>(d));
+        delete static_cast<ma_device*>(d);
+    }
+    m_devices.clear();
+    for (void* u : m_userData) delete static_cast<CallbackData*>(u);
+    m_userData.clear();
+    if (m_context) {
+        ma_context_uninit(static_cast<ma_context*>(m_context));
+        delete static_cast<ma_context*>(m_context);
+        m_context = nullptr;
+    }
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_slots.clear();
+    m_recording = false;
+    m_openCount = 0;
+}
+
+bool AudioCapture::open(const std::vector<std::string>& deviceNames) {
+    close();
 
     auto* context = new ma_context();
     if (ma_context_init(nullptr, 0, nullptr, context) != MA_SUCCESS) {
         delete context;
+        Log::error("Audio: impossibile inizializzare miniaudio");
         return false;
     }
     m_context = context;
 
-    ma_device_info* captureInfos = nullptr;
-    ma_uint32 captureCount = 0;
-    ma_context_get_devices(context, nullptr, nullptr, &captureInfos, &captureCount);
+    ma_device_info* infos = nullptr;
+    ma_uint32 count = 0;
+    ma_context_get_devices(context, nullptr, nullptr, &infos, &count);
 
-    // Nessuna selezione esplicita -> un solo device, quello predefinito di sistema.
-    std::vector<int> indices = deviceIndices;
-    bool useDefaultDevice = indices.empty();
-    if (useDefaultDevice) indices = { -1 }; // -1 = segnaposto per "device predefinito"
+    // Per nome: se un microfono salvato non c'è più (scollegato), si salta.
+    std::vector<int> indices;
+    for (const std::string& name : deviceNames) {
+        for (ma_uint32 i = 0; i < count; ++i) {
+            if (name == infos[i].name) { indices.push_back((int)i); break; }
+        }
+    }
+    if (indices.empty()) {
+        if (!deviceNames.empty()) Log::warn("Audio: i microfoni scelti non ci sono, uso quello predefinito");
+        indices.push_back(-1); // predefinito di Windows
+    }
 
-    m_perDeviceBuffers.resize(indices.size());
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_slots.assign(indices.size(), DeviceSlot{});
+        for (auto& s : m_slots) s.preRoll.assign(kPreRollSamples, 0.0f);
+    }
 
-    bool anyOk = false;
+    int opened = 0;
     for (size_t slot = 0; slot < indices.size(); ++slot) {
-        int idx = indices[slot];
-
         ma_device_config config = ma_device_config_init(ma_device_type_capture);
-        config.capture.format   = ma_format_f32;
+        config.capture.format = ma_format_f32;
         config.capture.channels = 1;
-        config.sampleRate       = kSampleRate;
-        config.dataCallback     = &dataCallback;
+        config.sampleRate = kSampleRate;
+        config.dataCallback = dataCallback;
+        config.periodSizeInMilliseconds = 20;
+        if (indices[slot] >= 0) config.capture.pDeviceID = &infos[indices[slot]].id;
 
-        if (!useDefaultDevice && idx >= 0 && static_cast<ma_uint32>(idx) < captureCount) {
-            config.capture.pDeviceID = &captureInfos[idx].id;
-        }
-
-        auto* userData = new DeviceUserData{ this, static_cast<int>(slot) };
-        config.pUserData = userData;
-
+        auto* data = new CallbackData{ this, (int)slot };
+        config.pUserData = data;
         auto* device = new ma_device();
-        if (ma_device_init(context, &config, device) != MA_SUCCESS) {
-            delete device;
-            delete userData;
-            continue; // proviamo comunque ad aprire le altre periferiche selezionate
-        }
-
-        if (ma_device_start(device) != MA_SUCCESS) {
+        if (ma_device_init(context, &config, device) != MA_SUCCESS || ma_device_start(device) != MA_SUCCESS) {
+            Log::warn("Audio: microfono non aperto: " + std::string(indices[slot] >= 0 ? infos[indices[slot]].name : "predefinito"));
             ma_device_uninit(device);
             delete device;
-            delete userData;
+            delete data;
             continue;
         }
-
         m_devices.push_back(device);
-        anyOk = true;
+        m_userData.push_back(data);
+        opened++;
+        Log::info("Audio: aperto " + std::string(device->capture.name));
     }
-
-    // NOTA: il contesto NON viene distrutto qui (a differenza di prima): resta
-    // vivo come membro m_context finché i device lo usano. Viene chiuso solo
-    // in closeDevices() (distruttore, o una successiva chiamata a init()).
-    return anyOk;
+    m_openCount = opened;
+    return opened > 0;
 }
 
-void AudioCapture::onAudioData(int deviceSlot, const float* input, unsigned int frameCount) {
-    if (input == nullptr) return;
+void AudioCapture::onAudioData(int slot, const float* input, unsigned int frameCount) {
+    if (!input || frameCount == 0) return;
+    const float gain = m_gain.load();
 
-    float gain = m_gain.load();
-
-    // Livello istantaneo (RMS) per il misuratore: calcolato sempre, anche
-    // quando non si sta registrando, così l'indicatore in GUI è "live".
-    if (frameCount > 0) {
-        double sumSq = 0.0;
-        for (unsigned int i = 0; i < frameCount; ++i) {
-            float s = input[i] * gain;
-            sumSq += static_cast<double>(s) * static_cast<double>(s);
-        }
-        m_currentLevel.store(static_cast<float>(std::sqrt(sumSq / frameCount)));
-    }
-
-    if (!m_recording) return;
-    if (deviceSlot < 0) return;
-
-    std::lock_guard<std::mutex> lock(m_mutex);
-    if (static_cast<size_t>(deviceSlot) >= m_perDeviceBuffers.size()) return;
-
-    auto& buf = m_perDeviceBuffers[deviceSlot];
-    buf.reserve(buf.size() + frameCount);
+    double sum = 0.0;
     for (unsigned int i = 0; i < frameCount; ++i) {
         float s = input[i] * gain;
-        if (s > 1.0f) s = 1.0f;
-        else if (s < -1.0f) s = -1.0f;
-        buf.push_back(s);
+        sum += (double)s * s;
+    }
+    m_currentLevel.store((float)std::sqrt(sum / frameCount));
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (slot < 0 || (size_t)slot >= m_slots.size()) return;
+    DeviceSlot& d = m_slots[slot];
+    const bool recording = m_recording.load();
+    for (unsigned int i = 0; i < frameCount; ++i) {
+        float s = std::clamp(input[i] * gain, -1.0f, 1.0f);
+        if (recording) {
+            if (d.recording.size() < kMaxRecordingSamples) d.recording.push_back(s);
+        } else {
+            d.preRoll[d.preRollPos] = s;
+            d.preRollPos = (d.preRollPos + 1) % d.preRoll.size();
+            if (d.preRollPos == 0) d.preRollFull = true;
+        }
     }
 }
 
 void AudioCapture::startRecording() {
     std::lock_guard<std::mutex> lock(m_mutex);
-    for (auto& buf : m_perDeviceBuffers) buf.clear();
+    for (DeviceSlot& d : m_slots) {
+        d.recording.clear();
+        d.recording.reserve((size_t)kSampleRate * 10);
+        // Il pre-ascolto, in ordine cronologico, apre la registrazione.
+        if (d.preRollFull) d.recording.insert(d.recording.end(), d.preRoll.begin() + d.preRollPos, d.preRoll.end());
+        d.recording.insert(d.recording.end(), d.preRoll.begin(), d.preRoll.begin() + d.preRollPos);
+        d.preRollPos = 0;
+        d.preRollFull = false;
+    }
     m_recording = true;
 }
 
-void AudioCapture::stopRecording() {
+std::vector<float> AudioCapture::stopRecording() {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_recording = false;
-}
-
-std::vector<float> AudioCapture::getSamples() {
-    std::lock_guard<std::mutex> lock(m_mutex);
-
-    size_t activeDevices = m_perDeviceBuffers.size();
-    if (activeDevices == 0) return {};
-    if (activeDevices == 1) return m_perDeviceBuffers[0]; // caso comune: un solo mic, nessun mix necessario
-
-    // Più periferiche: mix per media campione-per-campione. I clock delle
-    // periferiche non sono perfettamente sincronizzati, ma per il parlato
-    // (non serve precisione a livello di fase) va benissimo così.
-    size_t maxLen = 0;
-    for (auto& buf : m_perDeviceBuffers) maxLen = std::max(maxLen, buf.size());
-
-    std::vector<float> mixed(maxLen, 0.0f);
-    for (auto& buf : m_perDeviceBuffers) {
-        for (size_t i = 0; i < buf.size(); ++i) mixed[i] += buf[i];
+    // Il microfono che ha sentito più voce.
+    size_t best = 0;
+    double bestEnergy = -1.0;
+    for (size_t i = 0; i < m_slots.size(); ++i) {
+        double e = SpeechUtils::rms(m_slots[i].recording) * std::sqrt((double)m_slots[i].recording.size());
+        if (e > bestEnergy) { bestEnergy = e; best = i; }
     }
-    for (float& s : mixed) s /= static_cast<float>(activeDevices);
-
-    return mixed;
+    std::vector<float> result;
+    if (best < m_slots.size()) result.swap(m_slots[best].recording);
+    for (DeviceSlot& d : m_slots) d.recording.clear();
+    return result;
 }

@@ -15,18 +15,32 @@ simulated keyboard input.
 
 - **Push-to-talk**: hold a key (mouse button, keyboard key, or a button on
   your joystick/HOTAS) while you speak, release it when you're done
-- **Local transcription** (whisper.cpp): converts speech to text, offline
-- **Context-aware translation** (a small local LLM via llama.cpp): it doesn't
+- **Local transcription** (whisper.cpp, large-v3-turbo model): converts speech
+  to text, offline. A voice detector only passes it the spoken parts, so a
+  cough or a click doesn't turn into a made-up sentence
+- **Context-aware translation** (a local LLM via llama.cpp): it doesn't
   translate word by word, it understands the gaming context — the Italian
   "sono a terra" becomes "I'm down", not "I'm on the ground"
+- **Uses the graphics card** (Vulkan) when there is one: much faster
+  translation and transcription. Without one, it runs on the CPU
 - **Automatic chat typing**: opens the chat, types the message, and (if you
   want) sends it for you
 - **Multiple push-to-talk keys at once**: e.g. a mouse button while on foot,
   a joystick button while flying — both work, no need to pick one
-- **Multiple microphones at once**, if you need it
+- **Multiple microphones at once**, if you need it: for each sentence it uses
+  the one that heard you best
 - **Custom glossary**: teach the program community slang that doesn't exist in
   any "standard" language (e.g. `QT=quantum travel`)
-- **All settings save themselves** between sessions
+- **Gamer vocabulary**: chat abbreviations and gamer slang, both ways. When
+  you speak Italian with gamer slang on, "grazie, torno subito" becomes
+  "ty, brb" and "pushiamo, il nabbo sta feeddando" becomes "push, the noob is
+  feeding"; when reading chat into Italian, "omw, ty for the help" becomes
+  "sto arrivando, grazie per l'aiuto" (list in `src/gamer_slang.cpp`)
+- **Try it without the game**: type a sentence in the window and see the
+  translation right away; if you speak while the program's own window is in
+  the foreground, the result shows up in the history and isn't typed anywhere
+- **All settings save themselves** between sessions (settings from the
+  previous version are read and converted)
 
 ## How to use it
 
@@ -34,26 +48,35 @@ simulated keyboard input.
 
 1. Download `voice_to_chat.exe` from the [Releases](../../releases) section of
    this repository (or build it yourself, see below)
-2. Run it. On first launch it automatically downloads the two AI models it
-   needs (about 2.5 GB total, requires an internet connection); they're then
+2. Run it. On first launch it automatically downloads the AI models it
+   needs (about 5.6 GB total, requires an internet connection); they're then
    stored in `%appdata%\VoiceToChat\models\`, so this only happens once
-3. In the window:
-   - **Push-to-talk key**: defaults to the side mouse button. Click
-     "+ AGGIUNGI TASTO" (add key) to add more — just press the key or button
-     you want to use
-   - **Audio devices**: select one or more microphones, then click "Applica"
-     (apply)
-   - **Languages**: pick the language you speak and the language to translate
-     into. If they're the same, text goes to chat without translation
-   - **Auto-send**: when on, the message is sent to chat immediately; when
-     off, it's typed but left for you to send (**F10** toggles this even
-     while you're in-game)
+3. In the window (the pages are in the menu on the left; the interface is in
+   Italian):
+   - **Principale** (main): the language you speak and the language to
+     translate into (if they're the same, text goes to chat without
+     translation), gamer slang, **auto-send** (when off, the message is typed
+     but left for you to send; **F10** toggles it even in-game), the latest
+     sentences and a box to try the translation
+   - **Tasti e chat** (keys and chat): push-to-talk defaults to the side mouse
+     button. "+ Aggiungi un tasto" adds more (keyboard, mouse or
+     joystick/HOTAS): just press the key or button you want. The keys that
+     open the chat and send the message are set here too
+   - **Microfono**: one or more microphones, volume and silence threshold
+     (with automatic calibration)
+   - **Overlay**: the small status window on top of the game
+   - **Traduzione schermo** (screen translation): see below
 4. Hold the push-to-talk key, speak, release. The translated message appears
    in the game chat.
 
+The overlays are visible with the game in windowed or borderless mode
+(Windows doesn't show anything on top of exclusive fullscreen). If the game
+runs as administrator, run Voice to Chat as administrator too: Windows doesn't
+let a program type into another one with higher privileges.
+
 ### Customising the glossary
 
-Click "APRI GLOSSARIO PERSONALIZZATO" (open custom glossary): a text file
+Click "Apri il glossario" (open the glossary) on the main page: a text file
 opens (`%appdata%\VoiceToChat\glossary.txt`). Add one line per term:
 
 ```
@@ -65,15 +88,22 @@ Save the file — it takes effect immediately, no need to restart the program.
 ### Screen translation (OCR) — experimental
 
 There's an optional feature that reads a region of your screen with Windows'
-built-in OCR and shows a translated overlay next to it, intended for reading
-game chat written by other players.
+built-in OCR and shows a translated overlay just below it, intended for
+reading game chat written by other players. Turn it on in the "Traduzione
+schermo" page, click "Scegli la zona" (choose the area) and drag a rectangle
+around the game chat. It pauses while you speak, so your own sentence always
+comes first. Only English messages are translated; messages in other
+languages are shown as they are. Messages from one channel or organisation
+(e.g. `[LSE]`) can be collected on the "Messaggi filtrati" page.
 
 **Treat this as experimental.** OCR accuracy depends heavily on the game's
-font size and style: small, stylised text over a semi-transparent, moving
-background is close to the worst case for a general-purpose OCR engine, and
-recognition errors (especially around channel tags in square brackets) are
-common. It's off by default; enable it in the settings window if you want to
-try it with your setup.
+font size and style. The program enlarges the text to the size Windows' OCR
+reads best, removes the background behind the letters (planets, lights) and
+tolerates the most common misreadings (a `]` read as `I`, a player name split
+in two). A message is only translated once two readings in a row agree, and
+readings too garbled to make sense are skipped, but small, stylised text over
+a moving background is still a hard case. If something isn't translated, the
+"Apri il file di diagnosi dell'OCR" button shows what the OCR read.
 
 ## Building from source
 
@@ -82,9 +112,9 @@ executable, or you want to contribute, the detailed instructions (dependencies
 to clone, CMake configuration, common troubleshooting) are in
 [`BUILDING.en.md`](BUILDING.en.md).
 
-In short: Windows + Visual Studio (with the "Desktop development with C++"
-workload) + CMake + Git, then clone whisper.cpp/llama.cpp/miniaudio, open the
-folder in Visual Studio, and build in a Release configuration.
+In short: Windows + Visual Studio or Build Tools (with the "Desktop
+development with C++" workload) + Git + Vulkan SDK, then clone
+whisper.cpp/llama.cpp/miniaudio and double-click `compila.bat`.
 
 ## How it works under the hood
 
@@ -113,8 +143,9 @@ heavy lifting behind the scenes:
 - [whisper.cpp](https://github.com/ggml-org/whisper.cpp) — speech transcription
 - [llama.cpp](https://github.com/ggml-org/llama.cpp) — LLM inference
 - [miniaudio](https://github.com/mackron/miniaudio) — audio capture
-- [Qwen2.5](https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF) (Alibaba) —
-  the language model used for translation
+- [Qwen2.5 7B Instruct](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct) (Alibaba) —
+  the language model used for translation (GGUF by
+  [bartowski](https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF))
 
 ## Important notice — read before using
 

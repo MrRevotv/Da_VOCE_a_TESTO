@@ -1,22 +1,25 @@
 #pragma once
 
-#include <string>
+#include <atomic>
 #include <functional>
+#include <string>
 
-// Scarica un file da HTTPS con WinHTTP, l'API di rete già inclusa in
-// Windows: nessuna libreria esterna da aggiungere al progetto, coerente con
-// l'obiettivo di un unico eseguibile standalone.
+// Scarica i modelli con WinHTTP (già in Windows, nessuna libreria in più).
+// - Si scarica in "nome.part": il file vero compare solo a download finito
+//   e controllato. Un download interrotto non lascia mai un modello rotto.
+// - Se c'è già un .part, si riprende da dove si era fermato.
+// - Controlla la risposta del server (200/206) e che i byte arrivati siano
+//   quelli annunciati; riprova da solo se la connessione cade.
 namespace ModelDownloader {
 
-    // Chiamata periodicamente durante il download.
-    // totalBytes è -1 se il server non dichiara la dimensione (raro).
-    using ProgressCallback = std::function<void(long long downloadedBytes, long long totalBytes)>;
+    using ProgressCallback = std::function<void(long long downloaded, long long total)>;
 
-    // Scarica url e lo salva in destPath (sovrascrivendolo se esiste già).
-    // Segue automaticamente eventuali redirect (Hugging Face reindirizza
-    // spesso verso un CDN). Ritorna false in caso di qualunque errore di rete
-    // o di scrittura su disco.
-    bool downloadFile(const std::wstring& url, const std::wstring& destPath,
-                       const ProgressCallback& onProgress = nullptr);
+    bool downloadFile(const std::wstring& url, const std::wstring& destPath, const ProgressCallback& onProgress,
+                      const std::atomic<bool>* cancel, std::string& error);
+
+    // Il file comincia come un modello vero? "ggml" (whisper) o "GGUF" (llama).
+    // Serve a riconoscere un file rovinato da una versione precedente.
+    enum class Kind { Whisper, Gguf };
+    bool looksValid(const std::wstring& path, Kind kind);
 
 } // namespace ModelDownloader

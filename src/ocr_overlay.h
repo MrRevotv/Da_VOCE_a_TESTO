@@ -1,31 +1,36 @@
 #pragma once
 
 #include <windows.h>
-#include <string>
 
-// Piccola finestra semi-trasparente che mostra la traduzione del testo
-// letto (via OCR) da una zona di schermo scelta dall'utente. Si posiziona
-// SEMPRE fuori dal rettangolo catturato (sotto, o sopra se non c'è spazio):
-// così una cattura successiva della stessa zona non include mai il nostro
-// stesso testo tradotto, ed è impossibile finire in un ciclo dove il
-// programma traduce la propria traduzione.
+#include <functional>
+#include <string>
+#include <vector>
+
+// Riquadro semi-trasparente con la traduzione della chat letta dallo schermo.
+// Di solito sta appena SOTTO la zona letta (o sopra, se sotto non c'è
+// spazio): mai sopra la zona stessa. In più non compare nelle catture dello
+// schermo: il programma non può rileggere e ritradurre la propria traduzione.
+// Se l'utente lo sposta, resta dove l'ha messo.
 namespace OcrOverlay {
 
-    void create(HINSTANCE hInstance);
+    struct Line {
+        std::wstring prefix;  // "[SQUADRA] Trime98: " (colorato)
+        std::wstring text;
+        bool pending = false; // traduzione in corso: testo originale, più chiaro
+    };
 
-    // sourceRegion: il rettangolo (coordinate schermo) che è stato catturato
-    // e tradotto; l'overlay si posiziona in base a questo, mai sopra,
-    // A MENO CHE l'utente non l'abbia spostato manualmente (vedi sotto).
-    void showAt(const RECT& sourceRegion, const std::wstring& translatedText);
+    void create(HINSTANCE instance);
+    void destroy();
 
+    // region: la zona letta, in coordinate dello schermo.
+    void show(const RECT& region, const std::vector<Line>& lines);
     void hide();
 
-    // Sblocca l'overlay per "seconds" secondi: durante questo tempo si può
-    // trascinare con il mouse per riposizionarlo manualmente. Passato il
-    // tempo, si riblocca da solo. Una volta spostato manualmente, showAt()
-    // non lo riposiziona più automaticamente in base a sourceRegion: resta
-    // dove l'utente l'ha messo (utile se preferisce vederlo altrove).
+    void setOpacity(int alpha); // 60-255
+    // -1, -1 = sotto la zona letta.
+    void setPosition(int x, int y);
+
     void unlockForMove(int seconds);
-    bool isUnlocked();
+    void setOnMoved(std::function<void(int x, int y)> onMoved);
 
 } // namespace OcrOverlay

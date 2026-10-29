@@ -1,205 +1,304 @@
 #include "ocr_overlay.h"
-#include "ui_theme.h"
+#include "ui/ui.h"
+
+#include <dwmapi.h>
+#include <shellscalingapi.h>
 
 #include <algorithm>
 
 namespace {
-    HWND g_hwnd = nullptr;
-    HFONT g_font = nullptr;
-    std::wstring g_text;
-
-    constexpr int kMinWidth = 220;
-    constexpr int kMaxWidth = 720;
-    constexpr int kGap = 10;
+    constexpr int kMinWidth = 320;
+    constexpr int kMaxWidth = 760;
     constexpr int kPadding = 12;
-    constexpr UINT_PTR kUnlockTimerId = 1;
+    constexpr int kLineGap = 6;
+    constexpr int kRegionGap = 8;
+    constexpr UINT_PTR kUnlockTimer = 1;
+    constexpr UINT_PTR kTopmostTimer = 2;
+    constexpr const wchar_t* kClassName = L"VoiceToChatOcrOverlay";
 
+    HWND g_hwnd = nullptr;
+    std::vector<OcrOverlay::Line> g_lines;
+    RECT g_region{};
+    bool g_hasRegion = false;
+    bool g_shown = false; // c'è qualcosa da mostrare (indipendentemente dallo sblocco)
+    int g_alpha = 235;
+    int g_savedX = -1, g_savedY = -1;
     bool g_locked = true;
-    int g_unlockSecondsRemaining = 0;
-    bool g_hasManualPosition = false; // true dopo che l'utente l'ha trascinato almeno una volta
+    bool g_moved = false;
+    int g_secondsLeft = 0;
+    std::function<void(int, int)> g_onMoved;
 
-    int measureWrappedHeight(HFONT font, const std::wstring& text, int width) {
-        HDC hdc = GetDC(nullptr);
-        HFONT old = (HFONT)SelectObject(hdc, font);
-        RECT r = { 0, 0, width - 2 * kPadding, 0 };
-        DrawTextW(hdc, text.c_str(), -1, &r, DT_WORDBREAK | DT_CALCRECT);
-        SelectObject(hdc, old);
-        ReleaseDC(nullptr, hdc);
-        return r.bottom - r.top;
+    UINT dpiAt(const RECT& r) {
+        UINT x = 96, y = 96;
+        if (FAILED(GetDpiForMonitor(MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST), MDT_EFFECTIVE_DPI, &x, &y))) return 96;
+        return x;
     }
 
-    void relock(HWND hwnd) {
-        g_locked = true;
-        g_unlockSecondsRemaining = 0;
-        KillTimer(hwnd, kUnlockTimerId);
-
-        LONG_PTR ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        ex |= WS_EX_TRANSPARENT | WS_EX_NOACTIVATE;
-        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex);
-
-        InvalidateRect(hwnd, nullptr, TRUE);
-        UpdateWindow(hwnd);
+    bool hasManualPosition() {
+        return !(g_savedX == -1 && g_savedY == -1) && MonitorFromPoint(POINT{ g_savedX + 10, g_savedY + 10 }, MONITOR_DEFAULTTONULL);
     }
 
-    LRESULT CALLBACK OcrOverlayProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    struct Measured {
+        int prefixWidth = 0;
+        bool prefixOwnLine = false;
+        int height = 0;
+    };
+
+    Measured measureLine(HDC hdc, const OcrOverlay::Line& line, int innerWidth, UINT dpi) {
+        Measured m;
+        HFONT bold = Ui::font(Ui::Font::Bold, dpi), normal = Ui::font(Ui::Font::Normal, dpi);
+        if (!line.prefix.empty()) {
+            HGDIOBJ old = SelectObject(hdc, bold);
+            SIZE size{};
+            GetTextExtentPoint32W(hdc, line.prefix.c_str(), (int)line.prefix.size(), &size);
+            SelectObject(hdc, old);
+            m.prefixWidth = size.cx;
+            // Nome lunghissimo: va su una riga sua, il testo sotto a tutta larghezza.
+            m.prefixOwnLine = m.prefixWidth > innerWidth * 2 / 5;
+        }
+        if (m.prefixOwnLine) {
+            m.height = Ui::textHeight(hdc, line.prefix, innerWidth, bold) + Ui::textHeight(hdc, line.text, innerWidth, normal);
+        } else {
+            int textH = Ui::textHeight(hdc, line.text, innerWidth - m.prefixWidth, normal);
+            int prefixH = line.prefix.empty() ? 0 : Ui::textHeight(hdc, line.prefix, innerWidth, bold);
+            m.height = std::max(textH, prefixH);
+        }
+        return m;
+    }
+
+    // Misura e posiziona il riquadro per le righe attuali.
+    void layout() {
+        if (!g_hwnd) return;
+        RECT anchor = g_hasRegion ? g_region : RECT{ 100, 100, 100 + 480, 100 + 200 };
+        if (hasManualPosition()) anchor = RECT{ g_savedX, g_savedY, g_savedX + (anchor.right - anchor.left), g_savedY + 10 };
+        const UINT dpi = dpiAt(anchor);
+        MONITORINFO mi{ sizeof(mi) };
+        GetMonitorInfoW(MonitorFromRect(&anchor, MONITOR_DEFAULTTONEAREST), &mi);
+        const RECT mon = mi.rcMonitor;
+
+        const int width = std::clamp((int)(g_region.right - g_region.left), Ui::px(kMinWidth, dpi), Ui::px(kMaxWidth, dpi));
+        const int inner = width - 2 * Ui::px(kPadding, dpi);
+        const int maxHeight = (mon.bottom - mon.top) * 3 / 5;
+
+        HDC hdc = GetDC(g_hwnd);
+        std::vector<int> heights;
+        for (const auto& l : g_lines) heights.push_back(measureLine(hdc, l, inner, dpi).height);
+        ReleaseDC(g_hwnd, hdc);
+        // Troppo alto per lo schermo: si tolgono i messaggi più vecchi (in alto).
+        int height = 0;
+        size_t first = g_lines.size();
+        while (first > 0) {
+            int add = heights[first - 1] + (first < g_lines.size() ? Ui::px(kLineGap, dpi) : 0);
+            if (height + add + 2 * Ui::px(kPadding, dpi) > maxHeight && first < g_lines.size()) break;
+            height += add;
+            first--;
+        }
+        if (first > 0) g_lines.erase(g_lines.begin(), g_lines.begin() + first);
+        if (!g_locked) {
+            // La riga "Trascina per spostare..." in cima (vedi paint).
+            HDC dc = GetDC(g_hwnd);
+            height += Ui::textHeight(dc, L"Trascina per spostare", inner, Ui::font(Ui::Font::Normal, dpi)) + Ui::px(kLineGap, dpi);
+            ReleaseDC(g_hwnd, dc);
+        }
+        height += 2 * Ui::px(kPadding, dpi);
+        height = std::max(height, Ui::px(40, dpi));
+
+        int x, y;
+        if (hasManualPosition()) {
+            x = g_savedX;
+            y = g_savedY;
+        } else {
+            const int gap = Ui::px(kRegionGap, dpi);
+            x = anchor.left;
+            y = anchor.bottom + gap; // sotto la zona letta
+            if (y + height > mon.bottom) y = anchor.top - height - gap; // o sopra
+            if (y < mon.top) {
+                // Né sopra né sotto: di fianco, mai sopra la zona.
+                y = anchor.top;
+                x = anchor.right + gap;
+                if (x + width > mon.right) x = anchor.left - width - gap;
+            }
+            x = std::clamp(x, (int)mon.left, std::max((int)mon.left, (int)mon.right - width));
+            y = std::clamp(y, (int)mon.top, std::max((int)mon.top, (int)mon.bottom - height));
+        }
+        SetWindowPos(g_hwnd, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE);
+        InvalidateRect(g_hwnd, nullptr, FALSE);
+    }
+
+    void setLocked(bool locked) {
+        g_locked = locked;
+        LONG_PTR ex = GetWindowLongPtrW(g_hwnd, GWL_EXSTYLE);
+        if (locked) ex |= WS_EX_TRANSPARENT | WS_EX_NOACTIVATE;
+        else ex &= ~(LONG_PTR)(WS_EX_TRANSPARENT | WS_EX_NOACTIVATE);
+        SetWindowLongPtrW(g_hwnd, GWL_EXSTYLE, ex);
+        InvalidateRect(g_hwnd, nullptr, FALSE);
+    }
+
+    void relock() {
+        KillTimer(g_hwnd, kUnlockTimer);
+        setLocked(true);
+        if (g_moved) {
+            g_moved = false;
+            RECT r;
+            GetWindowRect(g_hwnd, &r);
+            g_savedX = r.left;
+            g_savedY = r.top;
+            if (g_onMoved) g_onMoved(r.left, r.top);
+        }
+        if (!g_shown) ShowWindow(g_hwnd, SW_HIDE);
+        else layout();
+    }
+
+    void paint(HWND hwnd) {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        RECT r;
+        GetClientRect(hwnd, &r);
+        const UINT dpi = Ui::dpiOf(hwnd);
+        {
+            Ui::Buffered buffer(hdc, r);
+            HDC dc = buffer.dc();
+            FillRect(dc, &r, Ui::brush(Ui::Color::Nav));
+            RECT b = r;
+            const int borderWidth = g_locked ? 1 : Ui::px(2, dpi);
+            for (int i = 0; i < borderWidth; ++i) {
+                FrameRect(dc, &b, Ui::brush(g_locked ? Ui::Color::PanelBorder : Ui::Color::Accent));
+                InflateRect(&b, -1, -1);
+            }
+
+            const int pad = Ui::px(kPadding, dpi);
+            const int inner = (r.right - r.left) - 2 * pad;
+            HFONT bold = Ui::font(Ui::Font::Bold, dpi), normal = Ui::font(Ui::Font::Normal, dpi);
+            int y = pad;
+            std::vector<OcrOverlay::Line> lines = g_lines;
+            if (!g_locked) {
+                lines.insert(lines.begin(), { L"", L"Trascina per spostare: si blocca tra " + std::to_wstring(g_secondsLeft) + L" s", true });
+            }
+            for (const auto& line : lines) {
+                Measured m = measureLine(dc, line, inner, dpi);
+                const COLORREF textColor = line.pending ? Ui::Color::TextDim : Ui::Color::Text;
+                if (m.prefixOwnLine) {
+                    RECT pr{ pad, y, pad + inner, r.bottom };
+                    Ui::drawText(dc, line.prefix, pr, bold, Ui::Color::Accent, DT_LEFT | DT_WORDBREAK);
+                    int ph = Ui::textHeight(dc, line.prefix, inner, bold);
+                    RECT tr{ pad, y + ph, pad + inner, r.bottom };
+                    Ui::drawText(dc, line.text, tr, normal, textColor, DT_LEFT | DT_WORDBREAK);
+                } else {
+                    if (!line.prefix.empty()) {
+                        RECT pr{ pad, y, pad + m.prefixWidth + 1, r.bottom };
+                        Ui::drawText(dc, line.prefix, pr, bold, Ui::Color::Accent, DT_LEFT | DT_SINGLELINE);
+                    }
+                    RECT tr{ pad + m.prefixWidth, y, pad + inner, r.bottom };
+                    Ui::drawText(dc, line.text, tr, normal, textColor, DT_LEFT | DT_WORDBREAK);
+                }
+                y += m.height + Ui::px(kLineGap, dpi);
+            }
+        }
+        EndPaint(hwnd, &ps);
+    }
+
+    LRESULT CALLBACK proc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
         switch (msg) {
         case WM_NCHITTEST:
-            if (!g_locked) return HTCAPTION; // sbloccato: tutta la finestra si trascina
+            if (!g_locked) return HTCAPTION;
             break;
-
+        case WM_MOVING:
+            g_moved = true;
+            break;
         case WM_TIMER:
-            if (wParam == kUnlockTimerId) {
-                g_unlockSecondsRemaining--;
-                if (g_unlockSecondsRemaining <= 0) {
-                    relock(hwnd);
-                } else {
-                    InvalidateRect(hwnd, nullptr, TRUE);
-                }
+            if (w == kUnlockTimer) {
+                if (--g_secondsLeft <= 0) relock();
+                else InvalidateRect(hwnd, nullptr, FALSE);
+            } else if (w == kTopmostTimer && IsWindowVisible(hwnd)) {
+                SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
             }
             return 0;
-
+        case WM_DPICHANGED:
+            // Le misure le rifà layout() (al prossimo aggiornamento o allo sblocco).
+            return 0;
         case WM_ERASEBKGND:
             return 1;
-
-        case WM_PAINT: {
-            PAINTSTRUCT ps;
-            HDC hdc = BeginPaint(hwnd, &ps);
-            RECT r; GetClientRect(hwnd, &r);
-
-            HBRUSH bg = UiTheme::brush(UiTheme::colorTitleBar());
-            FillRect(hdc, &r, bg);
-            DeleteObject(bg);
-
-            HPEN pen = CreatePen(PS_SOLID, g_locked ? 1 : 2, UiTheme::colorAccent());
-            HPEN oldPen = (HPEN)SelectObject(hdc, pen);
-            HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
-            Rectangle(hdc, r.left, r.top, r.right, r.bottom);
-            SelectObject(hdc, oldBrush);
-            SelectObject(hdc, oldPen);
-            DeleteObject(pen);
-
-            SetBkMode(hdc, TRANSPARENT);
-            SetTextColor(hdc, UiTheme::colorText());
-            SelectObject(hdc, g_font);
-            int textBottom = r.bottom - kPadding - (g_locked ? 0 : 18);
-            RECT textRect = { r.left + kPadding, r.top + kPadding, r.right - kPadding, textBottom };
-            DrawTextW(hdc, g_text.c_str(), -1, &textRect, DT_WORDBREAK);
-
-            if (!g_locked) {
-                std::wstring hint = L"Trascina per spostare - si blocca tra " +
-                    std::to_wstring(g_unlockSecondsRemaining) + L"s";
-                SetTextColor(hdc, UiTheme::colorTextDim());
-                RECT hintRect = { r.left + kPadding, r.bottom - kPadding - 16, r.right - kPadding, r.bottom - kPadding };
-                DrawTextW(hdc, hint.c_str(), -1, &hintRect, DT_SINGLELINE | DT_END_ELLIPSIS);
-            }
-
-            EndPaint(hwnd, &ps);
+        case WM_PAINT:
+            paint(hwnd);
             return 0;
         }
-        }
-        return DefWindowProcW(hwnd, msg, wParam, lParam);
+        return DefWindowProcW(hwnd, msg, w, l);
     }
 }
 
 namespace OcrOverlay {
 
-void create(HINSTANCE hInstance) {
+void create(HINSTANCE instance) {
     if (g_hwnd) return;
-
-    g_font = CreateFontW(-15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-
     WNDCLASSW wc{};
-    wc.lpfnWndProc = OcrOverlayProc;
-    wc.hInstance = hInstance;
-    wc.lpszClassName = L"VoiceToChatOcrOverlay";
-    wc.hbrBackground = nullptr;
+    wc.lpfnWndProc = proc;
+    wc.hInstance = instance;
+    wc.lpszClassName = kClassName;
+    wc.hCursor = LoadCursorW(nullptr, IDC_SIZEALL);
     RegisterClassW(&wc);
-
-    g_hwnd = CreateWindowExW(
-        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_LAYERED,
-        L"VoiceToChatOcrOverlay", L"", WS_POPUP,
-        0, 0, kMinWidth, 60, nullptr, nullptr, hInstance, nullptr);
-
-    if (g_hwnd) {
-        SetLayeredWindowAttributes(g_hwnd, 0, 235, LWA_ALPHA);
-    }
+    g_hwnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE, kClassName,
+                             L"Voice to Chat - traduzione schermo", WS_POPUP, 0, 0, 10, 10, nullptr, nullptr, instance, nullptr);
+    if (!g_hwnd) return;
+    SetLayeredWindowAttributes(g_hwnd, 0, (BYTE)g_alpha, LWA_ALPHA);
+    SetWindowDisplayAffinity(g_hwnd, 0x11 /* WDA_EXCLUDEFROMCAPTURE */);
+    SetTimer(g_hwnd, kTopmostTimer, 2000, nullptr);
 }
 
-void showAt(const RECT& sourceRegion, const std::wstring& translatedText) {
-    if (!g_hwnd || translatedText.empty()) return;
+void destroy() {
+    if (g_hwnd) DestroyWindow(g_hwnd);
+    g_hwnd = nullptr;
+}
 
-    g_text = translatedText;
-
-    int regionWidth = sourceRegion.right - sourceRegion.left;
-    int width = regionWidth;
-    if (width < kMinWidth) width = kMinWidth;
-    if (width > kMaxWidth) width = kMaxWidth;
-
-    int height = measureWrappedHeight(g_font, g_text, width) + 2 * kPadding;
-    if (height < 40) height = 40;
-
-    int x, y;
-
-    if (g_hasManualPosition) {
-        // L'utente l'ha già spostato manualmente: manteniamo la sua
-        // posizione, cambiamo solo dimensioni in base al nuovo testo.
-        RECT current;
-        GetWindowRect(g_hwnd, &current);
-        x = current.left;
-        y = current.top;
-    } else {
-        int screenH = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-        int vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
-
-        x = sourceRegion.left;
-        y = sourceRegion.bottom + kGap; // di default: appena SOTTO la zona catturata
-
-        // Se non c'entra sotto, la mettiamo sopra: mai sopra la zona
-        // catturata stessa (altrimenti rischieremmo di ri-catturare la
-        // nostra stessa traduzione).
-        if (y + height > vy + screenH) {
-            y = sourceRegion.top - height - kGap;
-        }
+void show(const RECT& region, const std::vector<Line>& lines) {
+    if (!g_hwnd) return;
+    const bool sameRegion = g_hasRegion && EqualRect(&g_region, &region);
+    bool same = sameRegion && g_shown && lines.size() == g_lines.size();
+    for (size_t i = 0; same && i < lines.size(); ++i) {
+        same = lines[i].prefix == g_lines[i].prefix && lines[i].text == g_lines[i].text && lines[i].pending == g_lines[i].pending;
     }
-
-    SetWindowPos(g_hwnd, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE);
-    InvalidateRect(g_hwnd, nullptr, TRUE);
+    if (same) return;
+    g_region = region;
+    g_hasRegion = true;
+    g_lines = lines;
+    g_shown = true;
+    layout();
     ShowWindow(g_hwnd, SW_SHOWNOACTIVATE);
-    UpdateWindow(g_hwnd);
 }
 
 void hide() {
-    if (g_hwnd) ShowWindow(g_hwnd, SW_HIDE);
+    g_shown = false;
+    g_lines.clear();
+    if (g_hwnd && g_locked) ShowWindow(g_hwnd, SW_HIDE);
+}
+
+void setOpacity(int alpha) {
+    g_alpha = alpha;
+    if (g_hwnd) SetLayeredWindowAttributes(g_hwnd, 0, (BYTE)alpha, LWA_ALPHA);
+}
+
+void setPosition(int x, int y) {
+    if (x == g_savedX && y == g_savedY) return;
+    g_savedX = x;
+    g_savedY = y;
+    if (g_hwnd && IsWindowVisible(g_hwnd)) layout();
 }
 
 void unlockForMove(int seconds) {
     if (!g_hwnd) return;
-
-    // Se era nascosto, mostralo (a un fallback ragionevole) così l'utente
-    // ha qualcosa da trascinare anche se non c'è ancora una traduzione.
-    if (!IsWindowVisible(g_hwnd)) {
-        if (g_text.empty()) g_text = L"(Anteprima: qui apparirà la traduzione)";
-        SetWindowPos(g_hwnd, HWND_TOPMOST, 100, 100, kMinWidth, 80, SWP_NOACTIVATE);
-        ShowWindow(g_hwnd, SW_SHOWNOACTIVATE);
+    if (!g_shown) {
+        // Niente da mostrare: un'anteprima, così c'è qualcosa da trascinare.
+        g_lines = { { L"[ESEMPIO] Giocatore: ", L"qui comparirà la traduzione della chat", false } };
     }
-
-    g_locked = false;
-    g_unlockSecondsRemaining = seconds;
-    g_hasManualPosition = true; // da ora in poi, mantieni sempre la posizione scelta
-
-    LONG_PTR ex = GetWindowLongPtrW(g_hwnd, GWL_EXSTYLE);
-    ex &= ~(WS_EX_TRANSPARENT | WS_EX_NOACTIVATE);
-    SetWindowLongPtrW(g_hwnd, GWL_EXSTYLE, ex);
-
-    SetTimer(g_hwnd, kUnlockTimerId, 1000, nullptr);
-    InvalidateRect(g_hwnd, nullptr, TRUE);
-    UpdateWindow(g_hwnd);
+    g_secondsLeft = seconds;
+    g_moved = false;
+    setLocked(false);
+    layout();
+    ShowWindow(g_hwnd, SW_SHOWNOACTIVATE);
+    SetTimer(g_hwnd, kUnlockTimer, 1000, nullptr);
 }
 
-bool isUnlocked() {
-    return !g_locked;
+void setOnMoved(std::function<void(int, int)> onMoved) {
+    g_onMoved = std::move(onMoved);
 }
 
 } // namespace OcrOverlay

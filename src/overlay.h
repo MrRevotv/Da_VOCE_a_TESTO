@@ -1,46 +1,35 @@
 #pragma once
 
 #include <windows.h>
+
+#include <functional>
 #include <string>
 
-// Piccola finestra sempre in primo piano, in un angolo dello schermo, che
-// mostra lo stato corrente (es. "In ascolto...") anche mentre il gioco ha
-// il focus. Normalmente "bloccata": i click ci passano attraverso (arriva
-// al gioco sotto, non all'overlay) e non ruba mai il focus.
+// Piccola finestra sempre in primo piano che mostra lo stato ("In ascolto",
+// "Traduco"...) anche mentre giochi. Normalmente è "bloccata": i clic la
+// attraversano e arrivano al gioco, e non prende mai il focus. Si può
+// sbloccare per qualche secondo per spostarla col mouse.
 //
-// Può essere temporaneamente "sbloccata" per spostarla: durante lo sblocco
-// accetta il click e si trascina come una finestra normale; dopo il tempo
-// indicato si riblocca da sola automaticamente.
+// Non compare nelle catture dello schermo (nemmeno in quella della
+// traduzione dello schermo, che altrimenti potrebbe leggerla).
 //
-// LIMITE NOTO: in modalità fullscreen ESCLUSIVO (non finestra/borderless),
-// Windows non mostra overlay di altri processi sopra il gioco: è una
-// restrizione del sistema operativo, non aggirabile da qui. Funziona in
-// finestra o fullscreen "borderless"/senza bordi.
+// LIMITE: in schermo intero ESCLUSIVO Windows non mostra finestre sopra il
+// gioco. Funziona in finestra o "finestra senza bordi" (borderless).
 namespace Overlay {
 
-    // savedX/savedY: posizione salvata (-1,-1 = nessuna, usa l'angolo di
-    // default). savedOpacityAlpha: 0-255, default 230 se non specificato.
-    void create(HINSTANCE hInstance, int savedX = -1, int savedY = -1, int savedOpacityAlpha = 230);
+    void create(HINSTANCE instance);
+    void destroy();
 
     void setVisible(bool visible);
-    bool isVisible();
+    // dot: colore del pallino; label: es. "IN ASCOLTO"; detail: la riga sotto.
+    void setStatus(COLORREF dot, const std::wstring& label, const std::wstring& detail);
+    void setOpacity(int alpha); // 60-255
+    // -1, -1 = angolo in basso a destra dello schermo principale.
+    void setPosition(int x, int y);
 
-    // Aggiorna il testo mostrato e il colore del pallino di stato.
-    // state: 0 = pronto/inattivo (grigio), 1 = in ascolto (verde),
-    //        2 = elaborazione/traduzione (giallo), 3 = errore (rosso).
-    void updateStatus(const std::string& text, int state);
-
-    // Sblocca l'overlay per "seconds" secondi: durante questo tempo si può
-    // trascinare con il mouse per riposizionarlo. Passato il tempo, si
-    // riblocca automaticamente da solo (i click tornano a passare attraverso).
+    // Si può trascinare per "seconds" secondi, poi si riblocca da sola e
+    // chiama onMoved con la nuova posizione (da salvare).
     void unlockForMove(int seconds);
-    bool isUnlocked();
-
-    // Trasparenza (0-255): valori bassi = più trasparente.
-    void setOpacity(int alpha);
-    int getOpacity();
-
-    // Posizione corrente sullo schermo, utile per salvarla nelle impostazioni.
-    void getPosition(int& x, int& y);
+    void setOnMoved(std::function<void(int x, int y)> onMoved);
 
 } // namespace Overlay

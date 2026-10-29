@@ -1,115 +1,141 @@
 #include "input_sender.h"
-#include <windows.h>
-#include <thread>
+#include "text_utils.h"
+
 #include <chrono>
-#include <vector>
+#include <thread>
 
 namespace {
-    int g_interCharDelayMs = 12;
+    INPUT scanInput(WORD scan, bool extended, bool keyUp) {
+        INPUT in{};
+        in.type = INPUT_KEYBOARD;
+        in.ki.wScan = scan;
+        in.ki.dwFlags = KEYEVENTF_SCANCODE | (extended ? KEYEVENTF_EXTENDEDKEY : 0) | (keyUp ? KEYEVENTF_KEYUP : 0);
+        return in;
+    }
 
-    // Invia un carattere come lo farebbe una tastiera fisica: trova il tasto
-    // (e l'eventuale Shift) necessario a produrlo con il layout corrente, poi
-    // manda scan code reali (KEYEVENTF_SCANCODE) invece di un pacchetto
-    // Unicode. Molte caselle di chat nei giochi ascoltano solo input "hardware"
-    // e ignorano silenziosamente KEYEVENTF_UNICODE.
-    void sendCharAsHardwareKey(wchar_t ch) {
-        SHORT vkAndShift = VkKeyScanW(ch);
-        BYTE vk = LOBYTE(vkAndShift);
-        BYTE shiftState = HIBYTE(vkAndShift);
+    WORD scanOf(UINT vk, HKL layout, bool& extended) {
+        UINT sc = MapVirtualKeyExW(vk, MAPVK_VK_TO_VSC_EX, layout);
+        extended = (sc & 0xFF00) == 0xE000 || (sc & 0xFF00) == 0xE100;
+        return static_cast<WORD>(sc & 0xFF);
+    }
 
-        // -1 (0xFFFF) = il layout di tastiera corrente non sa produrre questo
-        // carattere con un tasto fisico (es. simboli rari): in quel caso
-        // ripieghiamo sul pacchetto Unicode, meglio di niente.
-        if (vkAndShift == -1) {
-            INPUT input[2] = {};
-            input[0].type = INPUT_KEYBOARD;
-            input[0].ki.wScan = ch;
-            input[0].ki.dwFlags = KEYEVENTF_UNICODE;
-            input[1] = input[0];
-            input[1].ki.dwFlags |= KEYEVENTF_KEYUP;
-            SendInput(2, input, sizeof(INPUT));
-            return;
-        }
-
-        UINT scanCode = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
-        bool needShift = (shiftState & 0x1) != 0;
-
+    void sendStroke(const InputSender::Stroke& s) {
         std::vector<INPUT> events;
-
-        auto addKey = [&](UINT sc, bool keyUp) {
+        if (s.unicode) {
             INPUT in{};
             in.type = INPUT_KEYBOARD;
-            in.ki.wScan = static_cast<WORD>(sc);
-            in.ki.dwFlags = KEYEVENTF_SCANCODE | (keyUp ? KEYEVENTF_KEYUP : 0);
+            in.ki.wScan = s.ch;
+            in.ki.dwFlags = KEYEVENTF_UNICODE;
             events.push_back(in);
-        };
-
-        UINT shiftScan = MapVirtualKeyW(VK_SHIFT, MAPVK_VK_TO_VSC);
-        if (needShift) addKey(shiftScan, false);
-        addKey(scanCode, false);
-        addKey(scanCode, true);
-        if (needShift) addKey(shiftScan, true);
-
+            in.ki.dwFlags |= KEYEVENTF_KEYUP;
+            events.push_back(in);
+        } else {
+            const WORD lshift = 0x2A, lctrl = 0x1D, alt = 0x38;
+            // AltGr = Ctrl sinistro + Alt destro (che è un tasto "esteso").
+            const bool altGr = s.ctrl && s.alt;
+            if (s.shift) events.push_back(scanInput(lshift, false, false));
+            if (s.ctrl) events.push_back(scanInput(lctrl, false, false));
+            if (s.alt) events.push_back(scanInput(alt, altGr, false));
+            events.push_back(scanInput(s.scan, s.extended, false));
+            events.push_back(scanInput(s.scan, s.extended, true));
+            if (s.alt) events.push_back(scanInput(alt, altGr, true));
+            if (s.ctrl) events.push_back(scanInput(lctrl, false, true));
+            if (s.shift) events.push_back(scanInput(lshift, false, true));
+        }
         SendInput(static_cast<UINT>(events.size()), events.data(), sizeof(INPUT));
+    }
+
+    void sleepMs(int ms) {
+        if (ms > 0) std::this_thread::sleep_for(std::chrono::milliseconds(ms));
     }
 }
 
 namespace InputSender {
 
-    void setInterCharDelayMs(int ms) {
-        g_interCharDelayMs = ms;
-    }
+HKL foregroundLayout() {
+    HWND fg = GetForegroundWindow();
+    DWORD thread = fg ? GetWindowThreadProcessId(fg, nullptr) : 0;
+    return GetKeyboardLayout(thread);
+}
 
-    void typeText(const std::string& utf8Text) {
-        if (utf8Text.empty()) return;
+std::vector<Stroke> planText(const std::wstring& text, HKL layout, Unmappable mode, std::wstring* dropped) {
+    std::vector<Stroke> plan;
+    auto addChar = [&](wchar_t ch) -> bool {
+        SHORT res = VkKeyScanExW(ch, layout);
+        if (res == -1) return false;
+        BYTE vk = LOBYTE(res), mods = HIBYTE(res);
+        // Bit 8+ = stati particolari (kana...) che non sappiamo riprodurre.
+        if (mods & ~0x07) return false;
+        Stroke s;
+        s.scan = scanOf(vk, layout, s.extended);
+        if (s.scan == 0) return false;
+        s.shift = (mods & 1) != 0;
+        s.ctrl = (mods & 2) != 0;
+        s.alt = (mods & 4) != 0;
+        // Solo Ctrl (senza Alt) = un carattere di controllo: non è testo.
+        if (s.ctrl && !s.alt) return false;
+        plan.push_back(s);
+        return true;
+    };
 
-        // UTF-8 -> UTF-16, perché SendInput con KEYEVENTF_UNICODE vuole wchar_t.
-        int wideLen = MultiByteToWideChar(CP_UTF8, 0, utf8Text.c_str(), -1, nullptr, 0);
-        if (wideLen <= 0) return;
-
-        std::wstring wide(wideLen, L'\0');
-        MultiByteToWideChar(CP_UTF8, 0, utf8Text.c_str(), -1, wide.data(), wideLen);
-
-        for (wchar_t ch : wide) {
-            if (ch == L'\0') continue;
-            sendCharAsHardwareKey(ch);
-            if (g_interCharDelayMs > 0) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(g_interCharDelayMs));
-            }
+    for (wchar_t raw : text) {
+        wchar_t ch = raw;
+        if (ch == L'\r' || ch == L'\n' || ch == L'\t') ch = L' ';
+        if (ch < 32) continue;
+        if (addChar(ch)) continue;
+        if (mode == Unmappable::Unicode) {
+            Stroke s;
+            s.unicode = true;
+            s.ch = ch;
+            plan.push_back(s);
+            continue;
         }
+        std::wstring repl = TextUtils::transliterate(ch);
+        bool ok = !repl.empty();
+        for (wchar_t r : repl) ok = addChar(r) && ok;
+        if (!ok && dropped) dropped->push_back(ch);
     }
+    return plan;
+}
 
-    void pressKey(int virtualKey) {
-        UINT scanCode = MapVirtualKeyW((UINT)virtualKey, MAPVK_VK_TO_VSC);
-
-        INPUT input[2] = {};
-        input[0].type = INPUT_KEYBOARD;
-        input[0].ki.wScan = static_cast<WORD>(scanCode);
-        input[0].ki.dwFlags = KEYEVENTF_SCANCODE;
-
-        input[1] = input[0];
-        input[1].ki.dwFlags |= KEYEVENTF_KEYUP;
-
-        SendInput(2, input, sizeof(INPUT));
+bool waitForModifiersReleased(int timeoutMs) {
+    const int keys[] = { VK_SHIFT, VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN };
+    auto start = std::chrono::steady_clock::now();
+    while (true) {
+        bool anyDown = false;
+        for (int k : keys) anyDown = anyDown || (GetAsyncKeyState(k) & 0x8000) != 0;
+        if (!anyDown) return true;
+        if (std::chrono::steady_clock::now() - start > std::chrono::milliseconds(timeoutMs)) return false;
+        sleepMs(15);
     }
+}
 
-    void sendChatMessage(const std::string& utf8Text, bool autoSend, bool openEnabled,
-                          int openKeyVk, int sendKeyVk, int delayAfterOpenMs, int delayBeforeSendMs) {
-        if (utf8Text.empty()) return;
+void pressKey(int virtualKey) {
+    Stroke s;
+    s.scan = scanOf((UINT)virtualKey, foregroundLayout(), s.extended);
+    if (s.scan == 0) return;
+    sendStroke(s);
+}
 
-        if (openEnabled) {
-            pressKey(openKeyVk); // apre la chat (Invio di default, personalizzabile)
-            std::this_thread::sleep_for(std::chrono::milliseconds(delayAfterOpenMs));
-        }
+void sendChatMessage(const std::string& utf8Text, const Options& o) {
+    std::wstring text = TextUtils::utf8ToWide(utf8Text);
+    if (text.empty()) return;
+    HKL layout = foregroundLayout();
+    std::vector<Stroke> plan = planText(text, layout, o.unmappable);
+    if (plan.empty()) return;
 
-        typeText(utf8Text);
-
-        if (autoSend) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(delayBeforeSendMs));
-            pressKey(sendKeyVk); // invia il messaggio (Invio di default, personalizzabile)
-        }
-        // Se autoSend è false, il testo resta nella casella di chat aperta:
-        // l'utente decide se inviarlo o annullarlo a mano.
+    if (o.openChat) {
+        pressKey(o.openKeyVk);
+        sleepMs(o.delayAfterOpenMs);
     }
+    for (const Stroke& s : plan) {
+        sendStroke(s);
+        sleepMs(o.interCharDelayMs);
+    }
+    if (o.autoSend) {
+        sleepMs(o.delayBeforeSendMs);
+        pressKey(o.sendKeyVk);
+    }
+}
 
 } // namespace InputSender

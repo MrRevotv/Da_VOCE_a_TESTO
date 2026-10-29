@@ -1,37 +1,54 @@
 #pragma once
 
+#include "translation_prompt.h"
+
+#include <atomic>
+#include <mutex>
 #include <string>
 
-// Wrapper su llama.cpp: carica un piccolo modello istruito (es. Qwen2.5 3B
-// Instruct in formato GGUF) e lo usa per tradurre frasi in un tono "da gamer"
-// tenendo conto del gergo di gioco (es. "sono a terra" -> "I'm down"),
-// invece della traduzione letterale parola-per-parola di Whisper.
+// Wrapper su llama.cpp per le traduzioni (Qwen2.5 7B Instruct, GGUF).
+// - Sulla scheda video se c'è (vedi gpu.h), se no sul processore.
+// - Il modello si carica una volta. Ci sono due "canali", ognuno con la sua
+//   memoria: uno per la voce e uno per la chat letta dallo schermo. Così
+//   alternarli non costringe a rielaborare ogni volta le istruzioni dell'altro.
+// - Il prefisso del prompt (istruzioni + esempi) resta nella memoria del
+//   canale: a ogni frase si elabora solo la frase nuova, molto più veloce.
+// - Thread-safe: una traduzione alla volta (un mutex), qualunque thread la chieda.
+// - Interrompibile: chi la chiede può passare un flag "cancel" (la usa la
+//   traduzione dello schermo, che cede il passo alla voce).
 class LlmEngine {
 public:
-    LlmEngine();
+    enum class Result { Ok, Cancelled, Error };
+    enum class Channel { Voice = 0, Screen = 1 };
+
+    LlmEngine() = default;
     ~LlmEngine();
+    LlmEngine(const LlmEngine&) = delete;
+    LlmEngine& operator=(const LlmEngine&) = delete;
 
-    // nGpuLayers = 0 -> tutto su CPU. Se hai una GPU NVIDIA con CUDA
-    // configurato in whisper.cpp/llama.cpp, puoi alzarlo per velocizzare.
-    bool init(const std::string& modelPath, int nGpuLayers = 0);
+    bool init(const std::string& modelPath, int threads);
+    bool isReady() const { return m_ready.load(); }
 
-    // Traduce text da sourceLanguageName a targetLanguageName (nomi in
-    // inglese, es. "Italian", "English": i modelli seguono istruzioni in
-    // inglese in modo più affidabile). glossaryInstructions (opzionale) è
-    // una frase già pronta con le traduzioni fisse del glossario personale
-    // dell'utente (vedi glossary.h), inserita nel prompt di sistema.
-    // useGamingSlang: true = tono/gergo da videogiocatore (default),
-    // false = traduzione naturale/neutra, fedele al significato ma senza
-    // inventare slang di gioco (comportamento da "speech to text" normale).
-    // Ritorna la stringa originale se il motore non è inizializzato o in
-    // caso di errore, così il programma non si blocca mai per colpa della
-    // traduzione.
-    std::string translateGamingPhrase(const std::string& text,
-                                       const std::string& sourceLanguageName,
-                                       const std::string& targetLanguageName,
-                                       const std::string& glossaryInstructions = "",
-                                       bool useGamingSlang = true);
+    // out riceve la traduzione ripulita (vedi TranslationPrompt::cleanOutput).
+    Result translate(const TranslationRequest& request, std::string& out, Channel channel = Channel::Voice,
+                     const std::atomic<bool>* cancel = nullptr);
 
 private:
-    void* m_model = nullptr; // llama_model*
+    struct Slot {
+        void* ctx = nullptr; // llama_context*
+        std::string cachedPrefix;
+        int prefixTokens = 0;
+    };
+
+    bool load(const std::string& modelPath, int threads, void* gpu); // gpu: ggml_backend_dev_t, nullptr = processore
+    bool evalTokens(void* ctx, const std::vector<int>& tokens, const std::atomic<bool>* cancel);
+    void release();
+
+    std::mutex m_mutex;
+    std::atomic<bool> m_ready{ false };
+    void* m_model = nullptr;   // llama_model*
+    void* m_sampler = nullptr; // llama_sampler*
+    Slot m_slots[2];
+    int m_nCtx = 0;
+    int m_nBatch = 0;
 };

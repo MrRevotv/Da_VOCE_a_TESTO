@@ -7,150 +7,145 @@ contributori, o chi preferisce non scaricare l'exe già pronto). Se vuoi solo
 Push-to-talk -> trascrizione locale con whisper.cpp -> traduzione contestuale
 "da gamer" con un piccolo LLM locale (llama.cpp) -> digitazione simulata
 nella finestra di gioco attiva (con apertura/invio automatico della chat,
-stile Star Citizen). Tutto offline dopo il primo avvio, nessuna chiamata di
-rete continua. Interfaccia grafica nativa Win32 (nessuna libreria esterna).
+stile Star Citizen). In più, la traduzione della chat degli altri letta dallo
+schermo (OCR di Windows). Tutto offline dopo il primo avvio. Interfaccia
+grafica nativa Win32 (nessuna libreria esterna).
 
 L'eseguibile finale è **standalone**: un solo file .exe, compilato
 staticamente (nessuna DLL da distribuire). Al primo avvio scarica da solo i
-due modelli AI (whisper + LLM, circa 2.5 GB totali) dentro
+modelli AI (whisper, rilevatore di voce e LLM, circa 5.6 GB totali) dentro
 `%appdata%\VoiceToChat\models\`, poi resta utilizzabile offline.
 
 ## Struttura del progetto
 
 ```
-voice-to-chat/
+Da_VOCE_a_TESTO/
 ├── CMakeLists.txt
-├── README.md
-├── external/
-│   ├── whisper.cpp/      <-- da clonare (vedi sotto)
-│   ├── llama.cpp/        <-- da clonare (vedi sotto)
-│   └── miniaudio/
-│       └── miniaudio.h   <-- da scaricare (vedi sotto)
+├── compila.bat                compila tutto (Release) con Visual Studio / Build Tools
+├── external/                  <-- dipendenze da scaricare (vedi punto 2)
+│   ├── whisper.cpp/
+│   ├── llama.cpp/
+│   └── miniaudio/miniaudio.h
+├── tests/tests.cpp            prove automatiche (vtc_tests.exe)
 └── src/
-    ├── gui.cpp                punto d'ingresso: finestra Win32 + orchestrazione generale
-    ├── hotkey_listener.*      ascolto tasti globali: push-to-talk (multi-trigger) + tasti toggle
-    ├── joystick_input.*       lettura bottoni joystick/HOTAS (winmm)
-    ├── audio_capture.*        registrazione microfono, anche più periferiche insieme (miniaudio)
-    ├── whisper_engine.*       trascrizione, lingua configurabile (whisper.cpp)
-    ├── llm_engine.*           traduzione contestuale gaming, lingue configurabili (llama.cpp)
-    ├── input_sender.*         digitazione simulata + apertura/invio chat (SendInput)
-    ├── sc_locations.h         nomi propri di Star Citizen (aiuta whisper + LLM a riconoscerli)
-    ├── glossary.h/.cpp        glossario personalizzabile (%appdata%\VoiceToChat\glossary.txt)
-    ├── languages.h            elenco lingue supportate (codice whisper + nome GUI + nome per l'LLM)
-    ├── app_paths.*            percorsi in %appdata%\VoiceToChat
-    ├── app_settings.*         impostazioni persistite (%appdata%\VoiceToChat\settings.cfg)
-    ├── model_downloader.*     download automatico dei modelli al primo avvio (WinHTTP)
-    ├── ui_theme.h             palette colori della GUI
-    ├── text_utils.h           corregge il testo se l'LLM lo scrive tutto in maiuscolo
-    └── app_state.h            storico frasi + stato + impostazioni condivise con la GUI
+    ├── main.cpp               avvio: una sola copia, finestra, motore, chiusura ordinata
+    ├── engine.*               il "motore" senza finestre: avvio e download dei modelli,
+    │                          voce (una frase alla volta, in ordine), traduzione dello schermo
+    ├── audio_capture.*        microfoni (miniaudio): pre-ascolto di 0,4 s, più microfoni insieme
+    ├── speech_utils.*         silenzio, taglio dei bordi, frasi inventate da whisper
+    ├── whisper_engine.*       trascrizione (whisper.cpp)
+    ├── translation_prompt.*   come si chiede la traduzione al modello (esempi in 12 lingue)
+    ├── llm_engine.*           traduzione (llama.cpp), con memoria del prompt e interruzione
+    ├── gpu.*                  scheda video (Vulkan): quale usare, e il processore se manca
+    ├── input_sender.*         scrittura nel gioco (SendInput con scan code, AltGr, tastiera del gioco)
+    ├── hotkey_listener.*      tasti per parlare (tastiera, mouse, joystick) e F10
+    ├── joystick_input.*       joystick/HOTAS con DirectInput (fino a 128 pulsanti, id stabili)
+    ├── screen_capture.*       cattura e preparazione della zona di schermo per l'OCR
+    ├── ocr_engine.*           OCR di Windows (Windows.Media.Ocr)
+    ├── chat_parser.*          "[canale] Nome: messaggio", tollerante agli errori dell'OCR
+    ├── language_guess.*       il messaggio letto è in inglese? (si traducono solo quelli)
+    ├── glossary.*             glossario personale (%appdata%\VoiceToChat\glossary.txt)
+    ├── gamer_slang.*          vocabolario del videogiocatore: sigle e gergo (gg, brb, pushare...) nei due sensi
+    ├── app_settings.*         impostazioni (%appdata%\VoiceToChat\settings.cfg), anche quelle vecchie
+    ├── app_paths.*            cartelle e file in %appdata%\VoiceToChat
+    ├── model_downloader.*     download dei modelli (WinHTTP, ripresa, controlli)
+    ├── text_utils.*           conversioni UTF-8/UTF-16 e piccoli attrezzi per il testo
+    ├── log.*                  registro (%appdata%\VoiceToChat\log.txt)
+    ├── languages.h            lingue supportate
+    ├── sc_locations.h         nomi propri di Star Citizen
+    ├── overlay.*              finestrella di stato sopra il gioco
+    ├── ocr_overlay.*          riquadro con la traduzione della chat
+    ├── region_selector.*      scelta della zona dello schermo
+    └── ui/                    finestra principale, pagine, tema scuro
 ```
 
-Ogni "pezzo" della pipeline è isolato in un suo file: se in futuro vuoi
-sostituire il motore vocale, la libreria audio o il modo di digitare, tocchi
-un solo modulo senza toccare gli altri. NON esiste più una cartella
-`models/` dentro il progetto: i modelli li scarica l'exe stesso al primo
-avvio, dentro `%appdata%\VoiceToChat\models\`.
+Il motore (`engine` e i moduli sotto) non dipende dalle finestre: lo usano sia
+il programma sia le prove automatiche.
 
 ## 1. Prerequisiti
 
-- Visual Studio Community 2022 o superiore (componente "Desktop development with C++")
-- CMake (incluso in Visual Studio)
+- Visual Studio 2022 o più recente, oppure i soli "Build Tools", con il
+  componente **"Sviluppo di applicazioni desktop con C++"** (include CMake,
+  Ninja e il Windows SDK)
 - Git
+- **Vulkan SDK** (traduzione e trascrizione sulla scheda video):
+  `winget install KhronosGroup.VulkanSDK`, oppure da https://vulkan.lunarg.com.
+  Serve solo per compilare: chi usa l'exe ha già `vulkan-1.dll` con i driver
+  della scheda video, e senza l'exe funziona lo stesso sul processore
 
 ## 2. Scaricare le dipendenze (whisper.cpp, llama.cpp, miniaudio)
 
-Apri PowerShell nella cartella `voice-to-chat` (quella con dentro
-`CMakeLists.txt`) e lancia:
+Apri PowerShell nella cartella del progetto (quella con `CMakeLists.txt`) e lancia:
 
 ```powershell
-# whisper.cpp (motore di trascrizione)
-git clone https://github.com/ggml-org/whisper.cpp.git external/whisper.cpp
-
-# llama.cpp (motore di traduzione contestuale)
-git clone https://github.com/ggml-org/llama.cpp.git external/llama.cpp
-
-# miniaudio (libreria audio header-only: basta un file .h)
+git clone --depth 1 https://github.com/ggml-org/whisper.cpp.git external/whisper.cpp
+git clone --depth 1 https://github.com/ggml-org/llama.cpp.git external/llama.cpp
 mkdir external\miniaudio
 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/mackron/miniaudio/master/miniaudio.h" -OutFile "external\miniaudio\miniaudio.h"
 ```
 
-Non serve più scaricare a mano i modelli whisper/LLM: li scarica l'exe da
-solo al primo avvio (vedi punto 5).
+I modelli non si scaricano a mano: li scarica il programma al primo avvio.
 
-**Nota percorsi con spazi**: se il percorso della cartella del progetto
-contiene spazi (es. "Desktop\auto writer"), ricordati sempre le virgolette
-nei comandi PowerShell (`"C:\...\auto writer\..."`), altrimenti PowerShell
-interpreta lo spazio come separatore tra due argomenti diversi.
+**Percorsi con spazi**: se il percorso della cartella contiene spazi, metti
+sempre le virgolette nei comandi PowerShell.
 
-## 3. Aprire il progetto in Visual Studio
+## 3. Compilare
 
-1. Apri Visual Studio -> "Apri cartella locale" -> seleziona `voice-to-chat/`
-2. Aspetta che CMake configuri automaticamente (guarda il pannello "Output"
-   con "CMake" selezionato nella tendina: deve finire con "La generazione
-   CMake è terminata.", senza errori bloccanti — i warning di deprecazione
-   sono normali e innocui)
-3. Se la tendina di configurazione in alto mostra solo "x64-Debug", aggiungi
-   **x64-Release** da "Gestisci configurazioni..." e selezionala (build molto
-   più veloce a runtime, importante per la trascrizione/traduzione)
+Doppio clic su **`compila.bat`** (oppure lancialo dal prompt). Trova da solo
+Visual Studio, configura CMake e compila in Release:
 
-## 4. Compilare
+- `build\voice_to_chat.exe` — il programma
+- `build\vtc_tests.exe` — le prove automatiche
 
-Menu **Genera -> Ricompila tutto** (la prima volta compila anche ggml,
-whisper.cpp e llama.cpp da zero: può volerci qualche minuto).
+La prima volta compila anche ggml, whisper.cpp, llama.cpp e gli shader
+Vulkan: qualche minuto.
 
-Se l'elemento di avvio in alto non è `voice_to_chat.exe`, selezionalo dalla
-tendina apposita prima di premere F5.
+In alternativa: Visual Studio -> "Apri cartella locale" -> configurazione
+**x64-Release** -> Genera.
 
-## 5. Primo avvio: download automatico dei modelli
+Il programma è compilato per i processori con AVX2 (Intel e AMD dal
+2013-2015 in poi), **non** per il processore del PC che compila: così l'exe
+funziona anche sui PC degli altri.
 
-Premi **F5**. Al primo avvio, se non trova i modelli, il programma li
-scarica da solo (Hugging Face) dentro `%appdata%\VoiceToChat\models\`,
-mostrando la percentuale in console. Sono file grossi (whisper ~490 MB,
-LLM ~2 GB): la prima volta può volerci qualche minuto, poi resta tutto lì
-per gli avvii successivi (offline).
+## 4. Prove automatiche
 
-## 6. Uso
+```powershell
+build\vtc_tests.exe             # prove veloci (lettura chat, audio, prompt, tastiera, impostazioni)
+build\vtc_tests.exe --completi  # anche whisper, traduzione e OCR con i modelli veri
+build\vtc_tests.exe --ocr-sfondo # la chat su sfondi in movimento, letta con diverse puliture dell'immagine
+```
 
-Si apre una finestra con:
-- **Periferiche audio**: seleziona una o più checkbox, poi clicca "Applica periferiche"
-- **Lingue**: scegli lingua parlata (microfono) e lingua di traduzione (chat)
-  dai due menu a tendina — se sono uguali, il testo va in chat senza passare
-  dall'LLM
-- **Invio automatico**: checkbox (o tasto **F10** mentre giochi) per decidere
-  se il messaggio va inviato subito o resta scritto in chat per una revisione manuale
-- **Stato** e **storico ultime frasi** (ascoltato -> scritto)
+Le prove complete usano la voce sintetica di Windows come "frase detta" e una
+chat di Star Citizen disegnata per l'OCR. Non toccano impostazioni né glossario.
 
-Per parlare: tieni premuto il **tasto laterale del mouse** ("avanti",
-XBUTTON2) mentre sei in gioco con la chat pronta ad aprirsi, e rilascialo
-quando hai finito. Il testo apparirà tradotto (se necessario) e scritto
-automaticamente in chat, in stile Star Citizen (apre la chat con Invio,
-scrive, e se l'invio automatico è attivo la invia con un secondo Invio).
+Per provare il programma senza toccare le proprie impostazioni:
 
-Puoi cambiare il tasto push-to-talk in `src/gui.cpp` (costante `PUSH_TO_TALK_KEY`).
+```powershell
+build\voice_to_chat.exe --cartella-dati "C:\una\cartella\di\prova"
+```
 
-## 7. Personalizzare i luoghi di gioco riconosciuti e il glossario
+(impostazioni, glossario e registro in quella cartella; i modelli restano quelli di `%appdata%`).
 
-- `src/sc_locations.h`: nomi propri (stazioni, pianeti, città di Star
-  Citizen) usati per aiutare whisper a riconoscerli in trascrizione e per
-  dire all'LLM di non tradurli per sbaglio. Richiede una ricompilazione.
-- `%appdata%\VoiceToChat\glossary.txt`: gergo/slang personalizzato con
-  traduzione fissa, modificabile a runtime dalla GUI ("Apri glossario
-  personalizzato"), nessuna ricompilazione necessaria.
+## 5. Primo avvio
 
-## Prossimi passi (roadmap)
+Al primo avvio, se non trova i modelli, il programma li scarica da solo
+(Hugging Face) dentro `%appdata%\VoiceToChat\models\`, mostrando l'avanzamento
+nella finestra. Il download si può interrompere: riparte da dove era arrivato
+(premi "Riprova" o riavvia).
 
-- [x] Pipeline vocale multilingua gaming-aware, offline
-- [x] Digitazione + apertura/invio chat stile Star Citizen
-- [x] Eseguibile standalone (build statica, niente DLL)
-- [x] Download automatico dei modelli al primo avvio (%appdata%)
-- [x] Supporto multi-microfono (mix di più periferiche contemporaneamente)
-- [x] Invio automatico attivabile/disattivabile
-- [x] GUI nativa in stile "launcher da gioco" (periferiche, lingue, log, storico)
-- [x] Push-to-talk multi-trigger (tastiera/mouse + joystick/HOTAS insieme)
-- [x] Persistenza impostazioni utente in %appdata%
-- [x] Glossario personalizzabile a runtime
-- [x] Filtro anti-hallucination su silenzio (controllo energia del segnale)
-- [ ] Editor del glossario integrato nella GUI (per ora si apre in Notepad)
+## 6. Personalizzare
+
+- `src/sc_locations.h`: nomi propri di Star Citizen (aiutano whisper a
+  riconoscerli e la traduzione a non toccarli). Richiede una ricompilazione.
+- `%appdata%\VoiceToChat\glossary.txt`: gergo con traduzione fissa,
+  modificabile dal pulsante "Apri il glossario", senza ricompilare.
+
+## Se qualcosa non va
+
+- `%appdata%\VoiceToChat\log.txt`: cosa ha fatto il programma, con data e ora
+  (errori, frasi sentite e scritte, traduzioni dello schermo).
+- `%appdata%\VoiceToChat\debug_ocr.txt`: cosa ha letto l'OCR e come l'ha
+  diviso in messaggi (pulsante "Apri il file di diagnosi dell'OCR").
 
 ## Nota su anti-cheat
 
