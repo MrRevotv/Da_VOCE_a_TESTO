@@ -178,7 +178,15 @@ private:
     std::string m_screenCacheTarget;
     unsigned long long m_screenTick = 0;
     unsigned long long m_lastScreenHash = 0;
-    std::vector<std::pair<std::string, std::string>> m_lastReadings; // {chiave, testo} letti al giro prima
+    // I messaggi della lettura prima, nell'ordine della chat: un messaggio già
+    // tradotto tiene la sua traduzione anche se l'OCR lo rilegge in modo diverso.
+    struct ShownMessage {
+        std::string key;        // il testo per i confronti (TextUtils::normalizeForMatch)
+        std::string prefix, body;
+        std::string translated; // vuoto: letto una volta sola, in attesa di conferma
+    };
+    std::vector<ShownMessage> m_shown; // solo il thread dello schermo
+    std::atomic<bool> m_screenReset{ false }; // zona o lingua cambiate: la lettura prima non vale più
     bool m_screenAwaiting = false; // messaggi letti una volta sola: si rilegge presto per confermarli
     int m_emptyReads = 0;
     int m_ocrMaxDimension = 0;

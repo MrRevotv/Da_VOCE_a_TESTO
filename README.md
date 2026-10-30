@@ -48,10 +48,15 @@ gioco che accetti input da tastiera simulato.
   `src/gamer_slang.cpp`)
 - **Traduzione della chat degli altri**: legge la zona dello schermo con la
   chat del gioco (OCR di Windows, togliendo lo sfondo dietro le lettere),
-  traduce i messaggi nuovi in inglese (quando due letture di fila coincidono;
-  quelli in altre lingue restano come sono, quelli illeggibili si saltano) e
-  li mostra in un riquadro appena sotto; i messaggi di un canale o di un'organizzazione (es.
-  `[LSE]`) si possono raccogliere in una pagina a parte
+  solo quando Star Citizen è in primo piano, e traduce i messaggi nuovi in
+  inglese (quando due letture di fila coincidono; quelli in altre lingue
+  restano come sono, quelli illeggibili si saltano, menu e scritte del gioco
+  non si traducono). Ogni messaggio si traduce una volta sola: anche se l'OCR
+  lo rilegge in modo diverso, viene riconosciuto dal suo posto nella chat e
+  tiene la sua traduzione. Le tue frasi, quando compaiono in chat, si vedono
+  come le hai dette. Le traduzioni appaiono in un riquadro appena sotto; i
+  messaggi di un canale o di un'organizzazione (es. `[LSE]`) si possono
+  raccogliere in una pagina a parte
 - **Prova senza il gioco**: scrivi una frase nella finestra e vedi subito la
   traduzione; se parli mentre in primo piano c'è la finestra del programma,
   il risultato si vede nella cronologia e non viene scritto da nessuna parte

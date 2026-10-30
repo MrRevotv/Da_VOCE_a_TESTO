@@ -1142,7 +1142,8 @@ protected:
         int top = y;
         y = beginCard(y);
         y = note(L"Legge una zona dello schermo (la chat del gioco), traduce i messaggi degli altri giocatori e li mostra in un "
-                 L"riquadro appena sotto. Mentre parli si mette in pausa, così la tua frase ha la precedenza.",
+                 L"riquadro appena sotto. Legge solo con Star Citizen in primo piano e ogni messaggio si traduce una volta "
+                 L"sola. Mentre parli si mette in pausa, così la tua frase ha la precedenza.",
                  kIn, y, kInW);
         y += 2;
         m_enable = toggle(ID_ENABLE, L"Attiva la traduzione dello schermo", kIn, y, kInW);

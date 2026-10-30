@@ -91,10 +91,15 @@ There's an optional feature that reads a region of your screen with Windows'
 built-in OCR and shows a translated overlay just below it, intended for
 reading game chat written by other players. Turn it on in the "Traduzione
 schermo" page, click "Scegli la zona" (choose the area) and drag a rectangle
-around the game chat. It pauses while you speak, so your own sentence always
-comes first. Only English messages are translated; messages in other
-languages are shown as they are. Messages from one channel or organisation
-(e.g. `[LSE]`) can be collected on the "Messaggi filtrati" page.
+around the game chat. It only reads while Star Citizen is the foreground
+window, and it pauses while you speak, so your own sentence always comes
+first. Only English chat messages are translated; messages in other languages
+are shown as they are, and game menus or HUD text aren't translated. Each
+message is translated once: even when the OCR reads it differently later, it
+is recognised by its place in the chat and keeps its translation. Your own
+messages, when they show up in the chat, are shown as you said them. Messages
+from one channel or organisation (e.g. `[LSE]`) can be collected on the
+"Messaggi filtrati" page.
 
 **Treat this as experimental.** OCR accuracy depends heavily on the game's
 font size and style. The program enlarges the text to the size Windows' OCR

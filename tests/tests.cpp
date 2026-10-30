@@ -16,6 +16,7 @@
 #include "ocr_engine.h"
 #include "sc_locations.h"
 #include "screen_capture.h"
+#include "screen_match.h"
 #include "speech_utils.h"
 #include "text_utils.h"
 #include "translation_prompt.h"
@@ -255,6 +256,77 @@ namespace {
             CHECK_STR(msgs[2].playerName, "Tadzyk");
         }
         CHECK(ChatParser::parse({ "MENU", "Opzioni" }).empty());
+
+        // I due punti letti come un altro segno attaccato al nome (righe vere).
+        const std::pair<const char*, const char*> misreadColon[] = {
+            { "[GLOBALE] Kleran3464} hope thats you", "Kleran3464" },
+            { "[GLOBALE] RogueWave3} are the server dying here ?", "RogueWave3" },
+            { "[GLOBALE] Synethc\xC2\xBB" "a good luck kiwa 07", "Synethc" }, // "Synethc»a"
+            { "[GLOBALE] Kieran346'E the computers where you take out your ships", "Kieran346" },
+            { "[GLOBALE] Swashpiates% server change", "Swashpiates" },
+        };
+        for (const auto& c : misreadColon) {
+            CHECK(ChatParser::parseHeader(c.first, m));
+            CHECK_STR(m.playerName, c.second);
+        }
+        CHECK(ChatParser::parseHeader("[GLOBALE] Kleran3464} hope thats you", m));
+        CHECK_STR(m.body, "hope thats you");
+        CHECK(ChatParser::parseHeader("[GLOBALE] 1<1eran3464} hope thats you", m)); // nome illeggibile: resta nel testo
+        CHECK(m.playerName.empty());
+        // Il pallino dei messaggi nuovi tra il canale e il nome (righe vere).
+        CHECK(ChatParser::parseHeader("[GLOBALE] \xE2\x80\xA2" "Bearprime303a: reshare combat mission too pls", m));
+        CHECK_STR(m.playerName, "Bearprime303a");
+        CHECK_STR(m.body, "reshare combat mission too pls");
+        real = ChatParser::parse({ "[GLOBALE] DarkFloomC: where? tGLOBALEl\xE2\x80\xA2travissgrey: tolling grim hex 500k" });
+        CHECK_EQ(real.size(), (size_t)2);
+        if (real.size() == 2) {
+            CHECK_STR(real[0].body, "where?");
+            CHECK_STR(real[1].playerName, "travissgrey");
+            CHECK_STR(real[1].body, "tolling grim hex 500k");
+        }
+    }
+
+    // --- Lo stesso messaggio in due letture ------------------------------------------
+
+    std::vector<std::string> keys(const std::vector<const char*>& texts) {
+        std::vector<std::string> out;
+        for (const char* t : texts) out.push_back(TextUtils::normalizeForMatch(t));
+        return out;
+    }
+
+    void testScreenMatch() {
+        section("stesso messaggio in due letture");
+        auto key = [](const char* t) { return TextUtils::normalizeForMatch(t); };
+        // Letture vere dello stesso messaggio, una dopo l'altra.
+        CHECK(ScreenMatch::sameText(key("tolling grim hex 500k"), key("tolljng grim hex 500k")));
+        CHECK(ScreenMatch::sameText(key("tolling grim hex 500k"), key("tolliog grim hex 500k")));
+        CHECK(ScreenMatch::sameText(key("you Witt keep all your stuff"), key("you will eep all your stuff")));
+        CHECK(ScreenMatch::sameText(key("OK"), key("ok.")));
+        CHECK(!ScreenMatch::sameText(key("same"), key("rude")));
+        CHECK(!ScreenMatch::sameText(key("ok"), key("on")));
+        CHECK(!ScreenMatch::sameText(key("where are you"), key("who cares?")));
+        CHECK(ScreenMatch::sameNumbers(key("tolling grim hex 500k"), key("tolljng grim hex 500k")));
+        CHECK(!ScreenMatch::sameNumbers(key("need 2 guys"), key("need 3 guys")));
+        // Il nome finito nel testo, o perso con la prima parola.
+        CHECK(ScreenMatch::likeness(key("hope thats you"), key("Kleran3464} hope thats you")) >= 0.7);
+        CHECK(ScreenMatch::likeness(key("thats you"), key("hope thats you")) >= 0.7);
+        CHECK(ScreenMatch::likeness(key("same"), key("rude")) < 0.7);
+        CHECK(ScreenMatch::likeness(key("you"), key("hope thats you")) < 0.7); // pezzi troppo corti no
+
+        // La chat scorre: un messaggio nuovo in fondo, quelli di prima letti diversi.
+        auto match = ScreenMatch::align(keys({ "right im back", "if you guuys are here", "i just arrived" }),
+                                        keys({ "if yog guuys are bere", "i just arrived", "gonna grab smth to eat and im ready" }));
+        CHECK(match == std::vector<int>({ 1, 2, -1 }));
+        // Tra due messaggi riconosciuti, una lettura troppo rovinata: è quello di prima.
+        match = ScreenMatch::align(keys({ "ok your new", "not sure where that is", "the computers where you take out your ships" }),
+                                   keys({ "ok your new", "certo dove", "the computers vvhere you take out your ships", "invite me again please" }));
+        CHECK(match == std::vector<int>({ 0, 1, 2, -1 }));
+        // Lo stesso testo detto di nuovo in fondo è un messaggio nuovo.
+        match = ScreenMatch::align(keys({ "lol", "same", "ok" }), keys({ "same", "ok", "ok" }));
+        CHECK(match ==std::vector<int>({ 1, 2, -1 }) || match == std::vector<int>({ 1, -1, 2 }));
+        // Niente in comune, o nessuna lettura prima: tutti nuovi.
+        CHECK(ScreenMatch::align(keys({ "who cares?" }), keys({ "where are you" })) == std::vector<int>({ -1 }));
+        CHECK(ScreenMatch::align({}, keys({ "hi", "there" })) == std::vector<int>({ -1, -1 }));
     }
 
     // --- Audio e trascrizione ---------------------------------------------------------
@@ -463,6 +535,10 @@ namespace {
             CHECK(!en);
             if (en) std::printf("    preso per inglese: \"%s\"\n", other);
         }
+        // Una risposta vera del modello finita in cinese.
+        CHECK(LanguageGuess::hasCjk("certo dove \xC3\xA8\xE9\x82\xA3\xE4\xB8\xAA\xE6\xB6\x88\xE6\x81\xAF")); // "certo dove è那个消息"
+        CHECK(!LanguageGuess::hasCjk("perch\xC3\xA9 no? \xC3\xA8 gi\xC3\xA0 finito"));
+        CHECK(!LanguageGuess::hasCjk("\xD0\x9F\xD1\x80\xD0\xB8\xD0\xB2\xD0\xB5\xD1\x82")); // il cirillico non è cinese
     }
 
     // Una voce {da, a} c'è?
@@ -1045,6 +1121,7 @@ int main(int argc, char** argv) {
 
     std::printf("Prove di Voice to Chat\n");
     testChatParser();
+    testScreenMatch();
     testSpeechUtils();
     testTextUtils();
     testTranslationPrompt();

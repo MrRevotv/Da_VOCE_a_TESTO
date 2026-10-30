@@ -75,6 +75,7 @@ add_library(vtc_core STATIC
     src/model_downloader.cpp
     src/ocr_engine.cpp
     src/screen_capture.cpp
+    src/screen_match.cpp
     src/speech_utils.cpp
     src/text_utils.cpp
     src/translation_prompt.cpp

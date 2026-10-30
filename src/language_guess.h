@@ -14,4 +14,8 @@ namespace LanguageGuess {
 
     bool isEnglish(const std::string& text);
 
+    // Ideogrammi o caratteri giapponesi/coreani. Il modello a volte, davanti a
+    // una lettura senza senso, finisce la risposta in cinese.
+    bool hasCjk(const std::string& text);
+
 } // namespace LanguageGuess

@@ -53,6 +53,17 @@ namespace {
         return letter;
     }
 
+    // Il nome con i due punti letti come un altro segno attaccato: "Kleran3464}",
+    // "Swashpiates%", "Synethc»a", "Kieran346'E". Il nome è la parte prima del
+    // segno, se dopo restano al più due caratteri; se no, vuoto.
+    std::string nameBeforeMisreadColon(const std::string& token) {
+        size_t k = 0;
+        while (k < token.size() && (std::isalnum((unsigned char)token[k]) || token[k] == '_' || token[k] == '-' || token[k] == '.')) ++k;
+        if (k < 3 || k == token.size() || TextUtils::utf8ToWide(token.substr(k)).size() > 2) return {};
+        const std::string name = token.substr(0, k);
+        return isValidName(name) ? name : std::string{};
+    }
+
     // L'OCR legge la "_" dei nomi come una lineetta: "Cpt—Andromeda" è "Cpt_Andromeda".
     std::string dashesToUnderscore(std::string name) {
         for (const char* dash : { "\xE2\x80\x94", "\xE2\x80\x93" }) { // — –
@@ -288,11 +299,12 @@ namespace {
 
     size_t matchKnownChannel(const std::string& s, size_t i, std::string& channel, bool& framed);
 
-    // Dopo un canale: uno spazio, la fine, una "[" o un altro canale.
+    // Dopo un canale: uno spazio, la fine, una "[", un altro canale o il pallino dei messaggi nuovi.
     bool channelBoundary(const std::string& s, size_t q) {
         std::string unusedName;
         bool unusedFramed = false;
-        return q >= s.size() || s[q] == ' ' || isOpener(s[q]) || matchKnownChannel(s, q, unusedName, unusedFramed) != q;
+        return q >= s.size() || s[q] == ' ' || isOpener(s[q]) || skipBullet(s, q) != q ||
+               matchKnownChannel(s, q, unusedName, unusedFramed) != q;
     }
 
     // Il canale conosciuto che comincia in s[i], con le quadre anche lette
@@ -384,13 +396,19 @@ bool parseHeader(const std::string& rawLine, ChatMessage& out) {
     const size_t end = findKnownChannels(line, channels, framed);
     if (channels.empty()) return parseColonHeader(line, skipSpaces(line, skipBullet(line, 0)), out);
 
+    // Il pallino dei messaggi nuovi a volte finisce tra il canale e il nome:
+    // "tGLOBALEl•Bearprime3C30:", "[GLOBALE] •Knu112C32:".
+    size_t rest = end;
+    const size_t beforeBullet = skipSpaces(line, end);
+    if (skipBullet(line, beforeBullet) != beforeBullet) rest = skipBullet(line, beforeBullet);
+
     // Canali conosciuti: si riscrivono con le quadre giuste e il resto si legge come al solito.
     std::string clean;
     for (const auto& c : channels) clean += "[" + c + "]";
     const size_t cleanHead = clean.size();
-    clean += line.substr(end);
+    clean += line.substr(rest);
     if (parseColonHeader(clean, 0, out)) {
-        out.rawPrefix = line.substr(0, end) + out.rawPrefix.substr(cleanHead);
+        out.rawPrefix = line.substr(0, rest) + out.rawPrefix.substr(cleanHead);
         return true;
     }
 
@@ -399,12 +417,13 @@ bool parseHeader(const std::string& rawLine, ChatMessage& out) {
     // parola. Solo se le quadre si vedono, per non prendere per un messaggio
     // una riga di testo che comincia con "LSE" o "PARTY".
     if (!framed) return false;
-    const size_t j = skipSpaces(line, end);
+    const size_t j = skipSpaces(line, rest);
     size_t k = j;
     while (k < line.size() && line[k] != ' ' && line[k] != ':' && line[k] != ';') ++k;
-    const std::string name = dashesToUnderscore(line.substr(j, k - j));
+    std::string name = dashesToUnderscore(line.substr(j, k - j));
+    if (!isValidName(name)) name = nameBeforeMisreadColon(name);
     out.tags = channels;
-    if (isValidName(name)) {
+    if (!name.empty()) {
         if (k < line.size() && line[k] != ' ') ++k;
         out.playerName = name;
         out.rawPrefix = line.substr(0, k);
@@ -416,8 +435,8 @@ bool parseHeader(const std::string& rawLine, ChatMessage& out) {
     // (l'OCR a volte la spezza così): il canale dice comunque che qui comincia
     // un messaggio nuovo, non il seguito di quello sopra.
     out.playerName.clear();
-    out.rawPrefix = line.substr(0, end);
-    out.body = TextUtils::collapseSpaces(TextUtils::trim(line.substr(end)));
+    out.rawPrefix = line.substr(0, rest);
+    out.body = TextUtils::collapseSpaces(TextUtils::trim(line.substr(rest)));
     return true;
 }
 

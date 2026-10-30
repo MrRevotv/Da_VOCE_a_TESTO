@@ -12,6 +12,7 @@
 #include "ocr_engine.h"
 #include "sc_locations.h"
 #include "screen_capture.h"
+#include "screen_match.h"
 #include "speech_utils.h"
 #include "text_utils.h"
 
@@ -95,21 +96,36 @@ namespace {
         return pid == GetCurrentProcessId();
     }
 
-    // Una riga da tradurre deve avere almeno 3 lettere: l'OCR legge pezzi di
-    // grafica del gioco come "ll", "|" o "-".
-    bool hasEnoughLetters(const std::string& s) {
-        int letters = 0;
-        for (wchar_t c : TextUtils::utf8ToWide(s)) {
-            if (IsCharAlphaW(c)) letters++;
+    // La zona letta è la chat di Star Citizen: con un'altra finestra davanti
+    // (Discord, il browser, questa) lo schermo non si legge. Si riconosce dal
+    // programma (StarCitizen.exe) o, se l'anti-cheat non lascia guardare,
+    // dal titolo della finestra.
+    bool starCitizenInForeground() {
+        static DWORD lastPid = 0;
+        static bool lastResult = false;
+        HWND fg = GetForegroundWindow();
+        DWORD pid = 0;
+        if (fg) GetWindowThreadProcessId(fg, &pid);
+        if (!pid) return false;
+        if (pid == lastPid) return lastResult;
+        bool result = false;
+        if (HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)) {
+            wchar_t path[MAX_PATH];
+            DWORD size = MAX_PATH;
+            if (QueryFullProcessImageNameW(process, 0, path, &size)) {
+                const wchar_t* file = wcsrchr(path, L'\\');
+                result = _wcsicmp(file ? file + 1 : path, L"StarCitizen.exe") == 0;
+            }
+            CloseHandle(process);
         }
-        return letters >= 3;
-    }
-
-    // Indirizzi web e percorsi (una barra degli indirizzi finita nella zona letta): non si traducono.
-    bool looksLikeAddress(const std::string& s) {
-        if (s.find("//") != std::string::npos || TextUtils::containsIgnoreCase(s, "www.")) return true;
-        const std::string t = TextUtils::trim(s);
-        return t.size() > 25 && t.find(' ') == std::string::npos && t.find('/') != std::string::npos;
+        if (!result) {
+            wchar_t title[64] = {};
+            GetWindowTextW(fg, title, 64);
+            result = TextUtils::trim(TextUtils::wideToUtf8(title)) == "Star Citizen";
+        }
+        lastPid = pid;
+        lastResult = result;
+        return result;
     }
 
     // Valori fuori misura (file modificato a mano o rovinato) tornano sensati.
@@ -461,6 +477,7 @@ void Engine::applyChanges(const AppSettings& before, const AppSettings& after) {
                          before.ocrMaxMessages != after.ocrMaxMessages || before.chatFilterTag != after.chatFilterTag;
     if (screenChanged) {
         if (!after.ocrEnabled) setScreenView({});
+        m_screenReset = true;
         std::lock_guard<std::mutex> lock(m_screenMutex);
         m_screenWake = true;
     }
@@ -750,6 +767,10 @@ void Engine::screenLoop() {
         }
         if (m_stopping) break;
 
+        if (m_screenReset.exchange(false)) {
+            m_shown.clear();
+            m_lastScreenHash = 0;
+        }
         AppSettings s = settings();
         if (!s.ocrEnabled || s.ocrRegionW < 10 || s.ocrRegionH < 10) {
             setScreenView({});
@@ -758,6 +779,8 @@ void Engine::screenLoop() {
         }
         // Mentre parli o la tua frase è in lavorazione, lo schermo aspetta.
         if (!m_ready || m_recording || m_pendingJobs > 0) continue;
+        // Con un'altra finestra davanti il riquadro resta com'era.
+        if (!starCitizenInForeground()) continue;
         try {
             screenStep(s);
         } catch (const std::exception& e) {
@@ -832,48 +855,41 @@ void Engine::screenStep(const AppSettings& s) {
 
     struct Item {
         std::string prefix, body, key, player, translated;
-        std::string source;   // il testo da tradurre: la lettura più pulita tra questa e quella prima
+        std::string source;     // il testo da tradurre: la lettura più pulita tra questa e quella prima
         bool filtered = false;
-        bool waiting = false; // letto una volta sola: si traduce quando la lettura si conferma
+        bool fragment = false;  // la coda di un messaggio cominciato sopra la zona letta
+        bool waiting = false;   // letto una volta sola: si traduce quando la lettura si conferma
+        bool translate = false; // confermato: va al modello
     };
+    // Solo i messaggi della chat: menu, scritte e HUD (il gioco è in italiano) non si traducono.
     std::vector<Item> items;
-    if (!messages.empty()) {
-        size_t first = messages.size() > (size_t)s.ocrMaxMessages ? messages.size() - s.ocrMaxMessages : 0;
-        for (size_t i = first; i < messages.size(); ++i) {
-            const ChatMessage& m = messages[i];
-            Item it;
-            it.prefix = m.displayPrefix();
-            it.body = m.body;
-            it.player = m.playerName;
-            it.key = TextUtils::normalizeForMatch(m.body);
-            it.filtered = !s.chatFilterTag.empty() && ChatParser::matchesFilter(m, s.chatFilterTag);
-            // Una lettura illeggibile (sfondo in movimento, chat che sfuma) non si mostra né si traduce.
-            if (!it.key.empty() && !ChatParser::unreadable(it.body)) items.push_back(std::move(it));
-        }
-    } else {
-        // Non è una chat (un menu, un cartello...): si traducono le righe.
-        for (const auto& l : lines) {
-            if (!hasEnoughLetters(l) || looksLikeAddress(l) || ChatParser::unreadable(l)) continue;
-            Item it;
-            it.body = TextUtils::collapseSpaces(l);
-            it.key = TextUtils::normalizeForMatch(l);
-            items.push_back(std::move(it));
-        }
-        if (items.size() > (size_t)s.ocrMaxMessages) items.erase(items.begin(), items.end() - s.ocrMaxMessages);
+    const size_t first = messages.size() > (size_t)s.ocrMaxMessages ? messages.size() - s.ocrMaxMessages : 0;
+    for (size_t i = first; i < messages.size(); ++i) {
+        const ChatMessage& m = messages[i];
+        Item it;
+        it.prefix = m.displayPrefix();
+        it.body = m.body;
+        it.player = m.playerName;
+        it.key = TextUtils::normalizeForMatch(m.body);
+        it.filtered = !s.chatFilterTag.empty() && ChatParser::matchesFilter(m, s.chatFilterTag);
+        it.fragment = m.playerName.empty() && m.tags.empty();
+        // Una lettura illeggibile (sfondo in movimento, chat che sfuma) non si mostra né si traduce.
+        if (!it.key.empty() && !ChatParser::unreadable(it.body)) items.push_back(std::move(it));
     }
 
-    if (items.empty()) {
-        // La chat di Star Citizen si nasconde da sola dopo un po': il riquadro
-        // sparisce con lei (alla seconda lettura vuota, per non lampeggiare).
+    // La chat di Star Citizen si nasconde da sola dopo un po': il riquadro
+    // sparisce con lei (alla seconda lettura vuota, per non lampeggiare). I
+    // messaggi di prima restano in m_shown: quando la chat riappare, tengono
+    // la loro traduzione.
+    auto noChat = [&]() {
         if (++m_emptyReads >= 2) setScreenView(view);
         m_lastScreenHash = hash;
-        m_lastReadings.clear();
         m_screenAwaiting = false;
-        return;
-    }
-    m_emptyReads = 0;
+    };
+    if (items.empty()) return noChat();
 
     const bool sameLanguage = std::string(ocrTarget.englishName) == "English";
+    const bool cjkTarget = std::string(ocrTarget.code) == "zh" || std::string(ocrTarget.code) == "ja";
     const std::string cacheTarget = ocrTarget.englishName;
     if (cacheTarget != m_screenCacheTarget) {
         m_screenCache.clear();
@@ -885,9 +901,7 @@ void Engine::screenStep(const AppSettings& s) {
         if (it == m_screenCache.end()) {
             // L'OCR legge lo stesso messaggio con piccole differenze da un giro all'altro.
             for (auto c = m_screenCache.begin(); c != m_screenCache.end(); ++c) {
-                const size_t a = c->first.size(), b = key.size();
-                if (std::max(a, b) - std::min(a, b) > std::max(a, b) / 10 + 1) continue;
-                if (TextUtils::similarity(c->first, key) >= 0.92) {
+                if (ScreenMatch::sameText(c->first, key) && ScreenMatch::sameNumbers(c->first, key)) {
                     it = c;
                     break;
                 }
@@ -898,6 +912,75 @@ void Engine::screenStep(const AppSettings& s) {
         out = it->second.text;
         return true;
     };
+    auto remember = [&](const std::string& key, const std::string& text) {
+        m_screenCache[key] = { text, ++m_screenTick };
+        if (m_screenCache.size() > kMaxScreenCache) {
+            auto oldest = std::min_element(m_screenCache.begin(), m_screenCache.end(),
+                                           [](const auto& a, const auto& b) { return a.second.lastUsed < b.second.lastUsed; });
+            m_screenCache.erase(oldest);
+        }
+    };
+
+    // Le tue frasi scritte in chat: si mostra quello che hai detto, senza ritradurle.
+    std::vector<HistoryEntry> typed;
+    if (s.sourceLanguageIndex == s.ocrTargetLanguageIndex) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (auto h = m_history.rbegin(); h != m_history.rend() && typed.size() < 5; ++h) {
+            if (h->typed) typed.push_back(*h);
+        }
+    }
+    auto ownMessage = [&](const std::string& key, std::string& out) -> bool {
+        for (const auto& h : typed) {
+            if (ScreenMatch::likeness(TextUtils::normalizeForMatch(h.written), key) >= 0.8) {
+                out = h.heard;
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // Ogni messaggio si traduce una volta sola: quello che era già a schermo,
+    // riconosciuto dal posto nella chat anche se l'OCR ora lo legge diverso,
+    // tiene la sua traduzione (e il nome com'era, che cambia a ogni lettura).
+    std::vector<std::string> previousKeys, currentKeys;
+    for (const auto& p : m_shown) previousKeys.push_back(p.key);
+    for (const auto& it : items) currentKeys.push_back(it.key);
+    const std::vector<int> match = ScreenMatch::align(previousKeys, currentKeys);
+
+    m_screenAwaiting = false;
+    for (size_t i = 0; i < items.size(); ++i) {
+        Item& it = items[i];
+        it.source = it.body;
+        const ShownMessage* before = match[i] >= 0 ? &m_shown[match[i]] : nullptr;
+        if (before && !before->translated.empty()) {
+            it.translated = before->translated;
+            if (!before->prefix.empty()) it.prefix = before->prefix;
+            if (!it.fragment && it.key != before->key) remember(it.key, it.translated);
+            continue;
+        }
+        // Solo i messaggi in inglese: gli altri (italiano, polacco...) restano come sono.
+        if (sameLanguage || !LanguageGuess::isEnglish(it.body)) {
+            it.translated = it.body;
+            continue;
+        }
+        if (lookup(it.key, it.translated) || ownMessage(it.key, it.translated)) continue;
+        // Un pezzo di messaggio mai visto intero non si traduce: cambia a ogni riga che sale.
+        if (it.fragment) continue;
+        // Si traduce solo una lettura confermata: lo stesso messaggio letto quasi
+        // uguale anche al giro prima. Le letture rovinate dallo sfondo cambiano a
+        // ogni giro e non arrivano al modello; delle due si traduce la più pulita.
+        if (before && ScreenMatch::sameText(before->key, it.key)) {
+            it.translate = true;
+            if (ChatParser::garbledWords(before->body) < ChatParser::garbledWords(it.body)) it.source = before->body;
+        } else {
+            it.waiting = true;
+            m_screenAwaiting = true;
+        }
+    }
+    items.erase(std::remove_if(items.begin(), items.end(), [](const Item& it) { return it.fragment && it.translated.empty(); }),
+                items.end());
+    if (items.empty()) return noChat();
+    m_emptyReads = 0;
 
     auto render = [&]() {
         view.lines.clear();
@@ -907,44 +990,11 @@ void Engine::screenStep(const AppSettings& s) {
         view.visible = true;
         setScreenView(view);
     };
-
-    for (auto& it : items) {
-        // Solo i messaggi in inglese: gli altri (italiano, polacco...) restano come sono.
-        if (sameLanguage || !LanguageGuess::isEnglish(it.body)) it.translated = it.body;
-        else lookup(it.key, it.translated);
-    }
-
-    // Si traduce solo una lettura confermata: lo stesso messaggio letto quasi
-    // uguale anche al giro prima. Le letture rovinate dallo sfondo cambiano a
-    // ogni giro e non arrivano al modello; delle due si traduce la più pulita.
-    std::vector<std::pair<std::string, std::string>> readings;
-    m_screenAwaiting = false;
-    for (auto& it : items) {
-        readings.push_back({ it.key, it.body });
-        it.source = it.body;
-        if (!it.translated.empty()) continue;
-        const std::pair<std::string, std::string>* before = nullptr;
-        for (const auto& prev : m_lastReadings) {
-            const size_t a = prev.first.size(), b = it.key.size();
-            if (prev.first == it.key || (std::max(a, b) - std::min(a, b) <= std::max(a, b) / 10 + 1 &&
-                                         TextUtils::similarity(prev.first, it.key) >= 0.9)) {
-                before = &prev;
-                break;
-            }
-        }
-        if (!before) {
-            it.waiting = true;
-            m_screenAwaiting = true;
-        } else if (ChatParser::garbledWords(before->second) < ChatParser::garbledWords(it.body)) {
-            it.source = before->second;
-        }
-    }
-    m_lastReadings = std::move(readings);
     render();
 
     bool complete = true;
     for (auto& it : items) {
-        if (!it.translated.empty() || it.waiting) continue;
+        if (!it.translate) continue;
         if (m_stopping || m_recording || m_pendingJobs > 0) {
             complete = false;
             break;
@@ -963,18 +1013,20 @@ void Engine::screenStep(const AppSettings& s) {
             complete = false;
             break;
         }
-        if (res == LlmEngine::Result::Error || out.empty()) out = it.source; // meglio l'originale che niente
-        else out = GamerSlang::explain(out, r.targetLanguage);               // le sigle rimaste: "omw" -> "sto arrivando"
+        // Meglio l'originale che niente, o che una risposta finita in cinese.
+        if (res == LlmEngine::Result::Error || out.empty() || (!cjkTarget && LanguageGuess::hasCjk(out) && !LanguageGuess::hasCjk(it.source))) {
+            out = it.source;
+        } else {
+            out = GamerSlang::explain(out, r.targetLanguage); // le sigle rimaste: "omw" -> "sto arrivando"
+        }
         Log::info("Schermo: " + it.prefix + it.source + "  ->  " + out);
         it.translated = out;
-        m_screenCache[it.key] = { out, ++m_screenTick };
-        if (m_screenCache.size() > kMaxScreenCache) {
-            auto oldest = std::min_element(m_screenCache.begin(), m_screenCache.end(),
-                                           [](const auto& a, const auto& b) { return a.second.lastUsed < b.second.lastUsed; });
-            m_screenCache.erase(oldest);
-        }
+        remember(it.key, out);
         render();
     }
+
+    m_shown.clear();
+    for (const auto& it : items) m_shown.push_back({ it.key, it.prefix, it.body, it.translated });
 
     for (const auto& it : items) {
         if (!it.filtered || it.translated.empty()) continue;

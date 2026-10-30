@@ -106,4 +106,14 @@ bool isEnglish(const std::string& text) {
     return english > other;
 }
 
+bool hasCjk(const std::string& text) {
+    for (wchar_t c : TextUtils::utf8ToWide(text)) {
+        if ((c >= 0x3040 && c <= 0x30FF) || (c >= 0x3400 && c <= 0x9FFF) || (c >= 0xAC00 && c <= 0xD7AF) ||
+            (c >= 0xF900 && c <= 0xFAFF) || (c >= 0xFF00 && c <= 0xFFEF)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace LanguageGuess
