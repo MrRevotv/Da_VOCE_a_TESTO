@@ -8,9 +8,10 @@
 
 // Riquadro semi-trasparente con la traduzione della chat letta dallo schermo.
 // Di solito sta appena SOTTO la zona letta (o sopra, se sotto non c'è
-// spazio): mai sopra la zona stessa. In più non compare nelle catture dello
-// schermo: il programma non può rileggere e ritradurre la propria traduzione.
-// Se l'utente lo sposta, resta dove l'ha messo.
+// spazio): mai sopra la zona stessa. Si vede nelle catture dello schermo
+// (Discord, OBS), tranne quando copre la zona letta: lì il programma
+// rileggerebbe e ritradurrebbe la propria traduzione. Se l'utente lo sposta,
+// resta dove l'ha messo.
 namespace OcrOverlay {
 
     struct Line {

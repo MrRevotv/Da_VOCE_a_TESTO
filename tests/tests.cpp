@@ -9,6 +9,7 @@
 #include "chat_parser.h"
 #include "gamer_slang.h"
 #include "glossary.h"
+#include "gpu.h"
 #include "input_sender.h"
 #include "language_guess.h"
 #include "languages.h"
@@ -473,6 +474,7 @@ namespace {
         CHECK(std::abs(s.micGain - 1.2f) < 1e-6);
         CHECK_EQ(s.ocrTargetLanguageIndex, 0); // le righe di prima ("ocrAutoDetect"...) non danno fastidio
         CHECK_EQ(s.ocrRegionW, 464);
+        CHECK_EQ(s.gpuMemoryLimitMb, -1); // file di prima: memoria video senza limite, come allora
         CHECK_EQ(s.legacyDeviceIndices.size(), (size_t)1);
         CHECK_EQ(s.triggers.size(), (size_t)3);
         if (s.triggers.size() == 3) {
@@ -492,7 +494,9 @@ namespace {
         joy.buttonIndex = 17;
         s.triggers.push_back(joy);
         s.chatFilterTag = "LSE";
+        s.gpuMemoryLimitMb = 4096;
         AppSettings back = AppSettings::parse(s.serialize());
+        CHECK_EQ(back.gpuMemoryLimitMb, 4096);
         CHECK(back.deviceNames == s.deviceNames);
         CHECK_EQ(back.triggers.size(), s.triggers.size());
         CHECK(back.triggers == s.triggers);
@@ -1155,6 +1159,35 @@ int main(int argc, char** argv) {
             std::string out;
             if (llm.translate(r, out, LlmEngine::Channel::Screen) == LlmEngine::Result::Ok) out = GamerSlang::explain(out, r.targetLanguage);
             std::printf("  nomi da tenere %s: \"%s\"\n", withNames ? "SI" : "no", out.c_str());
+        }
+    }
+    // vtc_tests --memoria-video MB (-1 = senza limite): quanta memoria della scheda prendono i
+    // modelli con quel limite, divisa come fa il programma, e quanto ci mette una traduzione.
+    if (argc >= 3 && std::string(argv[1]) == "--memoria-video") {
+        const int limitMb = std::atoi(argv[2]);
+        const int threads = std::clamp((int)std::thread::hardware_concurrency() / 2, 2, 8);
+        const long long usedAtStart = Gpu::processMemory();
+        WhisperEngine whisper;
+        whisper.init(AppPaths::toLibraryPath(AppPaths::whisperModelPath()), AppPaths::toLibraryPath(AppPaths::vadModelPath()), threads,
+                     limitMb != 0);
+        const long long voice = whisper.onGpu() ? (whisper.gpuBytes() > 0 ? whisper.gpuBytes() : 1300LL << 20) : 0;
+        LlmEngine llm;
+        llm.init(AppPaths::toLibraryPath(AppPaths::llmModelPath()), threads,
+                 limitMb < 0 ? -1 : std::max(0LL, ((long long)limitMb << 20) - voice));
+        std::printf("  limite %d MB: whisper %lld MB, traduzione %d strati su %d, %lld MB; totale misurato %lld MB\n", limitMb,
+                    whisper.gpuBytes() >> 20, llm.gpuLayers(), llm.totalLayers(), llm.gpuBytes() >> 20,
+                    usedAtStart >= 0 ? (Gpu::processMemory() - usedAtStart) >> 20 : -1LL);
+        for (const char* text : { "anyone at CRU-L1 can call a ship?", "if you're stuck in a hab, you can hold backspace to die" }) {
+            TranslationRequest r;
+            r.text = text;
+            r.sourceLanguage = "English";
+            r.targetLanguage = "Italian";
+            r.fromScreen = true;
+            std::string out;
+            const auto t0 = std::chrono::steady_clock::now();
+            llm.translate(r, out, LlmEngine::Channel::Screen);
+            const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+            std::printf("  %.2f s: \"%s\"\n", s, out.c_str());
         }
     }
 

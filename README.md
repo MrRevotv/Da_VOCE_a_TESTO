@@ -30,7 +30,10 @@ gioco che accetti input da tastiera simulato.
   parola per parola, capisce il contesto di gioco — "sono a terra" diventa
   "I'm down", non "I'm on the ground"
 - **Usa la scheda video** (Vulkan) se c'è: traduzione e trascrizione molto
-  più veloci. Senza, funziona sul processore
+  più veloci. Senza, funziona sul processore. Se il gioco scatta perché la
+  memoria video non basta, nella pagina Principale si sceglie quanta usarne
+  (senza limite circa 5,8 GB; con 4 GB o 3 GB il resto va sul processore e
+  una traduzione richiede circa 2 secondi)
 - **Scrittura automatica in chat**: apre la chat, scrive il messaggio, e (se
   vuoi) lo invia da solo
 - **Più tasti push-to-talk insieme**: es. un bottone del mouse quando sei a
@@ -96,6 +99,11 @@ in "finestra senza bordi" (in schermo intero esclusivo Windows non mostra
 nulla sopra il gioco). Se il gioco gira come amministratore, avvia anche
 Voice to Chat come amministratore: Windows non lascia scrivere in un
 programma con più permessi.
+
+Nelle dirette (Discord condividendo lo schermo intero, OBS) si vede il
+riquadro della traduzione, non la finestrella di stato. Se sposti il riquadro
+sopra la zona letta, sparisce anche dalle dirette: lì il programma
+rileggerebbe la propria traduzione.
 
 ### Personalizzare il glossario
 

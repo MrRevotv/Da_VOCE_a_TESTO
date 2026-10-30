@@ -35,12 +35,14 @@ Da_VOCE_a_TESTO/
     ├── speech_utils.*         silenzio, taglio dei bordi, frasi inventate da whisper
     ├── whisper_engine.*       trascrizione (whisper.cpp)
     ├── translation_prompt.*   come si chiede la traduzione al modello (esempi in 12 lingue)
-    ├── llm_engine.*           traduzione (llama.cpp), con memoria del prompt e interruzione
-    ├── gpu.*                  scheda video (Vulkan): quale usare, e il processore se manca
+    ├── llm_engine.*           traduzione (llama.cpp), con memoria del prompt e interruzione; con un
+    │                          limite di memoria video, sulla scheda solo gli strati che ci stanno
+    ├── gpu.*                  scheda video (Vulkan): quale usare, il processore se manca, memoria usata
     ├── input_sender.*         scrittura nel gioco (SendInput con scan code, AltGr, tastiera del gioco)
     ├── hotkey_listener.*      tasti per parlare (tastiera, mouse, joystick) e F10
     ├── joystick_input.*       joystick/HOTAS con DirectInput (fino a 128 pulsanti, id stabili)
     ├── screen_capture.*       cattura e preparazione della zona di schermo per l'OCR
+    ├── screen_match.*         lo stesso messaggio in due letture dell'OCR (ogni messaggio si traduce una volta)
     ├── ocr_engine.*           OCR di Windows (Windows.Media.Ocr)
     ├── chat_parser.*          "[canale] Nome: messaggio", tollerante agli errori dell'OCR
     ├── language_guess.*       il messaggio letto è in inglese? (si traducono solo quelli)

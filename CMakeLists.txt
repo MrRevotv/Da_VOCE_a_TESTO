@@ -84,7 +84,7 @@ add_library(vtc_core STATIC
 target_include_directories(vtc_core PUBLIC src external/miniaudio)
 target_link_libraries(vtc_core PUBLIC
     whisper llama
-    user32 gdi32 winhttp shell32 winmm dinput8 dxguid ole32 windowsapp
+    user32 gdi32 winhttp shell32 winmm dinput8 dxguid dxgi ole32 windowsapp
     delayimp
 )
 # L'exe parte anche su un PC senza vulkan-1.dll: si carica alla prima chiamata.

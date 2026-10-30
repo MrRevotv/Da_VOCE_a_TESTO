@@ -38,12 +38,14 @@ Da_VOCE_a_TESTO/
     ├── speech_utils.*         silence detection, trimming, whisper's made-up phrases
     ├── whisper_engine.*       transcription (whisper.cpp)
     ├── translation_prompt.*   how the translation is asked (examples in 12 languages)
-    ├── llm_engine.*           translation (llama.cpp), with prompt caching and cancellation
-    ├── gpu.*                  graphics card (Vulkan): which one to use, CPU when missing
+    ├── llm_engine.*           translation (llama.cpp), with prompt caching and cancellation; with a
+    │                          video memory limit, only the layers that fit go on the card
+    ├── gpu.*                  graphics card (Vulkan): which one to use, CPU when missing, memory used
     ├── input_sender.*         typing into the game (SendInput scan codes, AltGr, the game's layout)
     ├── hotkey_listener.*      push-to-talk keys (keyboard, mouse, joystick) and F10
     ├── joystick_input.*       joysticks/HOTAS via DirectInput (up to 128 buttons, stable ids)
     ├── screen_capture.*       capture and preparation of the screen area for the OCR
+    ├── screen_match.*         the same message across two OCR readings (each message is translated once)
     ├── ocr_engine.*           Windows OCR (Windows.Media.Ocr)
     ├── chat_parser.*          "[channel] Name: message", tolerant of OCR mistakes
     ├── language_guess.*       is the message read in English? (only those are translated)

@@ -3,6 +3,7 @@
 #include "chat_parser.h"
 #include "gamer_slang.h"
 #include "glossary.h"
+#include "gpu.h"
 #include "input_sender.h"
 #include "joystick_input.h"
 #include "language_guess.h"
@@ -38,6 +39,18 @@ namespace {
     constexpr long long kWhisperMinBytes = 870LL * 1000 * 1000; // ggml-large-v3-turbo-q8_0.bin: 874.188.075 byte
     constexpr long long kVadMinBytes = 880LL * 1000;            // ggml-silero-v6.2.0.bin: 885.098 byte
     constexpr long long kLlmMinBytes = 4600LL * 1000 * 1000;    // Qwen2.5-7B-Instruct-Q4_K_M: 4.683.074.240 byte
+    // Whisper sulla scheda video, se il driver non dice quanto ha preso: modello e memoria di lavoro.
+    constexpr long long kWhisperGpuBytes = 1300LL << 20;
+
+    // " (1,1 GB)"; vuoto se non si sa.
+    std::string gigabytes(long long bytes) {
+        if (bytes <= 0) return "";
+        char buf[32];
+        snprintf(buf, sizeof(buf), " (%.1f GB)", bytes / 1073741824.0);
+        std::string s = buf;
+        std::replace(s.begin(), s.end(), '.', ',');
+        return s;
+    }
 
     std::string nowHHMM() {
         SYSTEMTIME t;
@@ -135,6 +148,7 @@ namespace {
         s.ocrTargetLanguageIndex = clampLanguageIndex(s.ocrTargetLanguageIndex);
         s.silenceThreshold = std::clamp(s.silenceThreshold, 0.0005, 0.2);
         s.micGain = std::clamp(s.micGain, 0.2f, 8.0f);
+        if (s.gpuMemoryLimitMb < -1) s.gpuMemoryLimitMb = -1;
         s.chatOpenDelayMs = std::clamp(s.chatOpenDelayMs, 0, 2000);
         s.typingDelayMs = std::clamp(s.typingDelayMs, 0, 200);
         s.overlayOpacity = std::clamp(s.overlayOpacity, 60, 255);
@@ -270,25 +284,12 @@ void Engine::startupThread() {
         if (m_stopping) return;
         if (!ensureModel(vadModelUrl(), AppPaths::vadModelPath(), false, kVadMinBytes, "rilevatore di voce", 2)) return;
         if (m_stopping) return;
-        setStatus(State::Starting, "Carico il modello vocale...");
-        if (!m_whisper.init(AppPaths::toLibraryPath(AppPaths::whisperModelPath()), AppPaths::toLibraryPath(AppPaths::vadModelPath()),
-                            inferenceThreads())) {
-            setStatus(State::Error, "Il modello vocale non si carica. Cancella ggml-large-v3-turbo-q8_0.bin da %appdata%\\VoiceToChat\\models e premi Riprova.", true);
-            return;
-        }
     }
-    if (m_stopping) return;
-
     if (!m_llm.isReady()) {
         if (!ensureModel(llmModelUrl(), AppPaths::llmModelPath(), true, kLlmMinBytes, "modello di traduzione", 3)) return;
         if (m_stopping) return;
-        setStatus(State::Starting, "Carico il modello di traduzione...");
-        if (!m_llm.init(AppPaths::toLibraryPath(AppPaths::llmModelPath()), inferenceThreads())) {
-            setStatus(State::Error, "Il modello di traduzione non si carica. Cancella il file .gguf da %appdata%\\VoiceToChat\\models e premi Riprova.", true);
-            return;
-        }
     }
-    if (m_stopping) return;
+    if (!loadModels()) return;
 
     openAudio(settings().deviceNames);
     m_ready = true;
@@ -298,6 +299,93 @@ void Engine::startupThread() {
         m_screenWake = true;
     }
     m_screenCv.notify_all();
+}
+
+bool Engine::loadModels() {
+    while (true) {
+        const int limitMb = settings().gpuMemoryLimitMb;
+        if (m_whisper.isReady() && limitMb != m_loadedGpuLimitMb) {
+            m_whisper.unload();
+            m_llm.unload();
+        }
+        m_loadedGpuLimitMb = limitMb;
+
+        // Whisper sulla scheda (serve solo mentre parli, e lì è molto più
+        // veloce); la traduzione prende il resto del limite.
+        if (!m_whisper.isReady()) {
+            setStatus(State::Starting, "Carico il modello vocale...");
+            if (!m_whisper.init(AppPaths::toLibraryPath(AppPaths::whisperModelPath()), AppPaths::toLibraryPath(AppPaths::vadModelPath()),
+                                inferenceThreads(), limitMb != 0)) {
+                setStatus(State::Error, "Il modello vocale non si carica. Cancella ggml-large-v3-turbo-q8_0.bin da %appdata%\\VoiceToChat\\models e premi Riprova.", true);
+                return false;
+            }
+        }
+        if (m_stopping) return false;
+        if (!m_llm.isReady()) {
+            setStatus(State::Starting, "Carico il modello di traduzione...");
+            // Se la scheda non dice quanto ha preso whisper, la misura tipica.
+            const long long voiceBytes = !m_whisper.onGpu() ? 0 : m_whisper.gpuBytes() > 0 ? m_whisper.gpuBytes() : kWhisperGpuBytes;
+            const long long budget = limitMb < 0 ? -1 : std::max(0LL, ((long long)limitMb << 20) - voiceBytes);
+            if (!m_llm.init(AppPaths::toLibraryPath(AppPaths::llmModelPath()), inferenceThreads(), budget)) {
+                setStatus(State::Error, "Il modello di traduzione non si carica. Cancella il file .gguf da %appdata%\\VoiceToChat\\models e premi Riprova.", true);
+                return false;
+            }
+        }
+        if (m_stopping) return false;
+
+        // Cosa sta dove, per la pagina Principale.
+        std::string summary;
+        if (!Gpu::bestDevice()) {
+            summary = "Nessuna scheda video compatibile: tutto sul processore.";
+        } else {
+            const std::string voice = m_whisper.onGpu() ? "modello vocale" + gigabytes(m_whisper.gpuBytes()) : "";
+            const int layers = m_llm.gpuLayers(), total = m_llm.totalLayers();
+            const std::string text = layers <= 0 ? ""
+                                     : layers >= total ? "traduzione intera" + gigabytes(m_llm.gpuBytes())
+                                                       : "traduzione, " + std::to_string(layers) + " parti su " + std::to_string(total) +
+                                                             gigabytes(m_llm.gpuBytes());
+            if (voice.empty() && text.empty()) summary = "In uso: niente sulla scheda video, tutto sul processore.";
+            else summary = "Sulla scheda video: " + voice + (voice.empty() || text.empty() ? "" : " e ") + text + "." +
+                           (layers < total ? " Il resto sul processore." : "");
+        }
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_gpuSummary = summary;
+        }
+        Log::info("Memoria video: " + summary);
+
+        // Limite cambiato mentre si caricava: si rifà con quello nuovo.
+        if (settings().gpuMemoryLimitMb == limitMb) return true;
+    }
+}
+
+void Engine::reloadModels() {
+    // Durante l'avvio il limite nuovo lo legge loadModels() alla fine.
+    if (m_stopping || m_startupRunning || !m_ready) return;
+    if (m_startup.joinable()) m_startup.join();
+    m_ready = false;
+    m_screenCancel = true;
+    m_startupRunning = true;
+    m_startup = std::thread([this]() {
+        struct Done {
+            std::atomic<bool>& flag;
+            ~Done() { flag = false; }
+        } done{ m_startupRunning };
+        Log::info("Limite della memoria video cambiato: ricarico i modelli");
+        if (!loadModels()) return;
+        m_ready = true;
+        setReadyStatus("Modelli ricaricati con il nuovo limite di memoria video");
+        {
+            std::lock_guard<std::mutex> lock(m_screenMutex);
+            m_screenWake = true;
+        }
+        m_screenCv.notify_all();
+    });
+}
+
+std::string Engine::gpuSummary() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_gpuSummary;
 }
 
 bool Engine::ensureModel(const std::wstring& url, const std::wstring& path, bool gguf, long long minBytes, const char* label, int index) {
@@ -467,6 +555,7 @@ void Engine::updateSettings(const std::function<void(AppSettings&)>& change) {
 void Engine::applyChanges(const AppSettings& before, const AppSettings& after) {
     if (!(before.triggers == after.triggers)) m_hotkeys.setTalkTriggers(after.triggers);
     if (before.micGain != after.micGain) m_audio.setGain(after.micGain);
+    if (before.gpuMemoryLimitMb != after.gpuMemoryLimitMb) reloadModels();
     if (before.deviceNames != after.deviceNames && m_ready) {
         openAudio(after.deviceNames);
         setReadyStatus(m_audio.isOpen() ? "Microfono cambiato" : "");

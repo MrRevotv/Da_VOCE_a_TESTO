@@ -95,6 +95,10 @@ public:
     float micLevel() const { return m_audio.getCurrentLevel(); }
     int openMicrophoneCount() const { return m_audio.openDeviceCount(); }
 
+    // Cosa c'è sulla scheda video e quanta memoria prende (misurata al
+    // caricamento): "Sulla scheda video: modello vocale (1,1 GB) e ...".
+    std::string gpuSummary() const;
+
     // Durante la scelta di un tasto nuovo il push-to-talk è sospeso.
     void setTalkPaused(bool paused) { m_hotkeys.setPaused(paused); }
 
@@ -113,6 +117,11 @@ public:
 private:
     void startupThread();
     bool ensureModel(const std::wstring& url, const std::wstring& path, bool gguf, long long minBytes, const char* label, int index);
+    // Carica i modelli non ancora pronti con il limite di memoria video delle
+    // impostazioni (se il limite è cambiato, li ricarica tutti e due).
+    bool loadModels();
+    // Limite di memoria video cambiato: ricarica i modelli in un thread (qualche secondo).
+    void reloadModels();
     void convertLegacySettings();
     void openAudio(const std::vector<std::string>& deviceNames);
     void applyChanges(const AppSettings& before, const AppSettings& after);
@@ -143,6 +152,7 @@ private:
     AppSettings m_settings;
     ScreenView m_screenView;
     std::deque<std::pair<std::string, std::string>> m_filtered; // {chiave, riga}
+    std::string m_gpuSummary;
 
     AudioCapture m_audio;
     std::mutex m_audioMutex; // apertura/chiusura dei microfoni
@@ -155,6 +165,7 @@ private:
     std::atomic<bool> m_stopping{ false };
     std::thread m_startup;
     std::atomic<bool> m_startupRunning{ false };
+    int m_loadedGpuLimitMb = -2; // il limite con cui sono caricati i modelli (solo i thread di avvio)
 
     // Coda delle frasi da elaborare.
     std::mutex m_jobMutex;

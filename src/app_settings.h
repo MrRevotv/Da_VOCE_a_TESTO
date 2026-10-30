@@ -19,6 +19,10 @@ struct AppSettings {
     double silenceThreshold = 0.01;
     float micGain = 1.0f;
 
+    // Memoria della scheda video per i modelli, in MB: -1 = senza limite, 0 =
+    // tutto sul processore. Il gioco ha bisogno della sua: oltre, scatta.
+    int gpuMemoryLimitMb = -1;
+
     // Scrittura nel gioco
     bool chatOpenEnabled = true;
     int chatOpenKeyVk = 0x0D;   // Invio

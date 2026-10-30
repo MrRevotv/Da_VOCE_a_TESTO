@@ -21,7 +21,16 @@ WhisperEngine::~WhisperEngine() {
     m_ctx = nullptr;
 }
 
-bool WhisperEngine::init(const std::string& modelPath, const std::string& vadModelPath, int threads) {
+void WhisperEngine::unload() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_ready = false;
+    if (m_ctx) whisper_free(static_cast<whisper_context*>(m_ctx));
+    m_ctx = nullptr;
+    m_onGpu = false;
+    m_gpuBytes = 0;
+}
+
+bool WhisperEngine::init(const std::string& modelPath, const std::string& vadModelPath, int threads, bool useGpu) {
     std::lock_guard<std::mutex> lock(m_mutex);
     whisper_log_set(quietLog, nullptr);
     if (m_ctx) {
@@ -31,10 +40,11 @@ bool WhisperEngine::init(const std::string& modelPath, const std::string& vadMod
     }
     whisper_context_params cp = whisper_context_default_params();
     // Sulla scheda video se c'è (vedi gpu.h); se non va, sul processore.
-    cp.use_gpu = Gpu::bestDevice() != nullptr;
+    cp.use_gpu = useGpu && Gpu::bestDevice() != nullptr;
     cp.gpu_device = std::max(0, Gpu::bestDeviceIndex());
     // flash_attn: con la build solo-CPU dava crash al caricamento.
     cp.flash_attn = false;
+    const long long usedBefore = cp.use_gpu ? Gpu::processMemory() : -1;
     whisper_context* ctx = whisper_init_from_file_with_params(modelPath.c_str(), cp);
     if (!ctx && cp.use_gpu) {
         Log::warn("Whisper: non parte sulla scheda video, uso il processore");
@@ -48,8 +58,13 @@ bool WhisperEngine::init(const std::string& modelPath, const std::string& vadMod
     m_ctx = ctx;
     m_vadPath = vadModelPath;
     m_threads = threads;
+    m_onGpu = cp.use_gpu;
+    m_gpuBytes = cp.use_gpu && usedBefore >= 0 ? std::max(0LL, Gpu::processMemory() - usedBefore) : 0;
     m_ready = true;
-    Log::info("Whisper pronto (" + (cp.use_gpu ? "scheda video " + Gpu::bestDeviceName() : std::to_string(threads) + " thread") + ")");
+    Log::info("Whisper pronto (" +
+              (cp.use_gpu ? "scheda video " + Gpu::bestDeviceName() + ", " + std::to_string(m_gpuBytes >> 20) + " MB"
+                          : std::to_string(threads) + " thread") +
+              ")");
     return true;
 }
 

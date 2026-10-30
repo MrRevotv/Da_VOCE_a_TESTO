@@ -22,7 +22,10 @@ simulated keyboard input.
   translate word by word, it understands the gaming context — the Italian
   "sono a terra" becomes "I'm down", not "I'm on the ground"
 - **Uses the graphics card** (Vulkan) when there is one: much faster
-  translation and transcription. Without one, it runs on the CPU
+  translation and transcription. Without one, it runs on the CPU. If the game
+  stutters because video memory runs out, the main page lets you choose how
+  much to use (about 5.8 GB with no limit; with 4 GB or 3 GB the rest runs on
+  the CPU and a translation takes about 2 seconds)
 - **Automatic chat typing**: opens the chat, types the message, and (if you
   want) sends it for you
 - **Multiple push-to-talk keys at once**: e.g. a mouse button while on foot,
@@ -73,6 +76,11 @@ The overlays are visible with the game in windowed or borderless mode
 (Windows doesn't show anything on top of exclusive fullscreen). If the game
 runs as administrator, run Voice to Chat as administrator too: Windows doesn't
 let a program type into another one with higher privileges.
+
+In streams (Discord sharing the entire screen, OBS) the translation box is
+visible, the small status window isn't. If you move the box over the area
+being read, it's hidden from streams too: there the program would read its
+own translation back.
 
 ### Customising the glossary
 

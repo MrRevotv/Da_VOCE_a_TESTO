@@ -25,6 +25,7 @@ namespace {
     int g_savedX = -1, g_savedY = -1;
     bool g_locked = true;
     bool g_moved = false;
+    bool g_hiddenFromCapture = false;
     int g_secondsLeft = 0;
     std::function<void(int, int)> g_onMoved;
 
@@ -64,6 +65,16 @@ namespace {
             m.height = std::max(textH, prefixH);
         }
         return m;
+    }
+
+    // Il riquadro si vede nelle catture dello schermo (Discord, OBS), tranne
+    // quando copre la zona letta: lì il programma rileggerebbe la propria traduzione.
+    void updateCaptureVisibility() {
+        RECT r, overlap;
+        if (!g_hwnd || !GetWindowRect(g_hwnd, &r)) return;
+        const bool hide = g_hasRegion && IntersectRect(&overlap, &r, &g_region);
+        if (hide == g_hiddenFromCapture) return;
+        if (SetWindowDisplayAffinity(g_hwnd, hide ? 0x11 /* WDA_EXCLUDEFROMCAPTURE */ : WDA_NONE)) g_hiddenFromCapture = hide;
     }
 
     // Misura e posiziona il riquadro per le righe attuali.
@@ -122,6 +133,7 @@ namespace {
             y = std::clamp(y, (int)mon.top, std::max((int)mon.top, (int)mon.bottom - height));
         }
         SetWindowPos(g_hwnd, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE);
+        updateCaptureVisibility(); // anche se si è spostata solo la zona
         InvalidateRect(g_hwnd, nullptr, FALSE);
     }
 
@@ -205,6 +217,9 @@ namespace {
         case WM_MOVING:
             g_moved = true;
             break;
+        case WM_WINDOWPOSCHANGED: // anche mentre lo trascini
+            updateCaptureVisibility();
+            break;
         case WM_TIMER:
             if (w == kUnlockTimer) {
                 if (--g_secondsLeft <= 0) relock();
@@ -240,7 +255,6 @@ void create(HINSTANCE instance) {
                              L"Voice to Chat - traduzione schermo", WS_POPUP, 0, 0, 10, 10, nullptr, nullptr, instance, nullptr);
     if (!g_hwnd) return;
     SetLayeredWindowAttributes(g_hwnd, 0, (BYTE)g_alpha, LWA_ALPHA);
-    SetWindowDisplayAffinity(g_hwnd, 0x11 /* WDA_EXCLUDEFROMCAPTURE */);
     SetTimer(g_hwnd, kTopmostTimer, 2000, nullptr);
 }
 

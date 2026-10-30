@@ -63,6 +63,7 @@ AppSettings AppSettings::parse(const std::string& content) {
         else if (key == "device") s.legacyDeviceIndices.push_back(toInt(v, 0)); // versione vecchia: per posizione
         else if (key == "silenceThreshold") s.silenceThreshold = toDouble(v, 0.01);
         else if (key == "micGain") s.micGain = (float)toDouble(v, 1.0);
+        else if (key == "gpuMemoryLimitMb") s.gpuMemoryLimitMb = toInt(v, -1);
         else if (key == "chatOpenEnabled") s.chatOpenEnabled = toBool(v);
         else if (key == "chatOpenKeyVk") s.chatOpenKeyVk = toInt(v, 0x0D);
         else if (key == "chatSendKeyVk") s.chatSendKeyVk = toInt(v, 0x0D);
@@ -126,6 +127,7 @@ std::string AppSettings::serialize() const {
     for (const auto& d : deviceNames) o << "deviceName=" << d << "\n";
     o << "silenceThreshold=" << silenceThreshold << "\n";
     o << "micGain=" << micGain << "\n";
+    o << "gpuMemoryLimitMb=" << gpuMemoryLimitMb << "\n";
     o << "chatOpenEnabled=" << (chatOpenEnabled ? 1 : 0) << "\n";
     o << "chatOpenKeyVk=" << chatOpenKeyVk << "\n";
     o << "chatSendKeyVk=" << chatSendKeyVk << "\n";

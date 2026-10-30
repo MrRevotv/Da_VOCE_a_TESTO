@@ -508,7 +508,21 @@ public:
     }
 
 protected:
-    enum { ID_RETRY = 100, ID_SOURCE, ID_TARGET, ID_SWAP, ID_GAMING, ID_AUTOSEND, ID_HISTORY, ID_TEST_EDIT, ID_TEST, ID_GLOSSARY, ID_METER };
+    enum {
+        ID_RETRY = 100, ID_SOURCE, ID_TARGET, ID_SWAP, ID_GAMING, ID_AUTOSEND, ID_HISTORY, ID_TEST_EDIT, ID_TEST, ID_GLOSSARY, ID_METER,
+        ID_GPU_LIMIT
+    };
+
+    // Le scelte del limite di memoria video (MB; -1 = senza limite, 0 = niente scheda).
+    static constexpr std::pair<int, const wchar_t*> kGpuLimits[] = {
+        { -1, L"Senza limite: tutto sulla scheda (più veloce)" },
+        { 6144, L"6 GB" },
+        { 5120, L"5 GB" },
+        { 4096, L"4 GB" },
+        { 3072, L"3 GB" },
+        { 2048, L"2 GB" },
+        { 0, L"Niente: tutto sul processore (lento)" },
+    };
 
     void build() override {
         int y = 16;
@@ -576,7 +590,23 @@ protected:
         y += 2;
         button(ID_GLOSSARY, L"Apri il glossario", Ui::ButtonKind::Secondary, kIn, y, 190);
         y += 32;
-        endCard(top, y, L"GLOSSARIO");
+        y = endCard(top, y, L"GLOSSARIO");
+
+        // Memoria della scheda video
+        top = y;
+        y = beginCard(y);
+        y = note(L"Se il gioco scatta, abbassa il limite: la parte dei modelli che non ci sta va sul processore (traduzioni "
+                 L"più lente, stessa qualità). Cambiandolo, i modelli si ricaricano in qualche secondo.",
+                 kIn, y, kInW);
+        y += 2;
+        std::vector<std::wstring> limits;
+        for (const auto& l : kGpuLimits) limits.push_back(l.second);
+        m_gpuLimit = combo(ID_GPU_LIMIT, limits, kIn, y, 340);
+        y += 40;
+        const int gpuInfoHeight = measureText(L"x\nx", kInW, Ui::Font::Normal, m_dpi);
+        m_gpuInfo = label(L"", kIn, y, kInW, gpuInfoHeight, Ui::Color::TextDim);
+        y += gpuInfoHeight;
+        endCard(top, y, L"MEMORIA DELLA SCHEDA VIDEO");
 
         onShow();
     }
@@ -630,6 +660,14 @@ protected:
             Glossary::load(); // se non c'è, lo crea con gli esempi
             openInNotepad(m_hwnd, Glossary::filePath());
             break;
+        case ID_GPU_LIMIT:
+            if (code == CBN_SELCHANGE) {
+                const int sel = (int)SendMessageW(m_gpuLimit, CB_GETCURSEL, 0, 0);
+                if (sel >= 0 && sel < (int)std::size(kGpuLimits)) {
+                    m_engine.updateSettings([&](AppSettings& s) { s.gpuMemoryLimitMb = kGpuLimits[sel].first; });
+                }
+            }
+            break;
         case ID_RETRY:
             m_engine.retryStart();
             break;
@@ -649,12 +687,18 @@ private:
         SendMessageW(m_target, CB_SETCURSEL, s.targetLanguageIndex, 0);
         Ui::setChecked(m_gaming, s.gamingTone);
         Ui::setChecked(m_autoSend, s.autoSend);
+        int gpuSel = -1;
+        for (int i = 0; i < (int)std::size(kGpuLimits); ++i) {
+            if (kGpuLimits[i].first == s.gpuMemoryLimitMb) gpuSel = i;
+        }
+        SendMessageW(m_gpuLimit, CB_SETCURSEL, gpuSel, 0);
     }
 
     void updateStatus() {
         Engine::Status st = m_engine.status();
         Ui::setText(m_state, stateLabel(st.state));
         Ui::setText(m_detail, w(st.text));
+        Ui::setText(m_gpuInfo, w(st.state == Engine::State::Starting ? std::string("Caricamento dei modelli...") : m_engine.gpuSummary()));
         ShowWindow(m_retry, st.canRetry ? SW_SHOWNA : SW_HIDE);
         COLORREF c = stateColor(st.state);
         if (c != m_dotColor) {
@@ -672,6 +716,7 @@ private:
     HWND m_state = nullptr, m_detail = nullptr, m_retry = nullptr, m_meter = nullptr;
     HWND m_source = nullptr, m_target = nullptr, m_gaming = nullptr, m_autoSend = nullptr;
     HWND m_history = nullptr, m_testEdit = nullptr;
+    HWND m_gpuLimit = nullptr, m_gpuInfo = nullptr;
     RECT m_dot{};
     COLORREF m_dotColor = Ui::Color::Idle;
 };

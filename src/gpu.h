@@ -22,4 +22,10 @@ namespace Gpu {
     // "AMD Radeon RX 7900 XT (20 GB)", per il registro.
     std::string bestDeviceName();
 
+    // Memoria della scheda usata da questo programma adesso, in byte (come la
+    // conta Windows); -1 = non si sa. Prima e dopo il caricamento di un
+    // modello dice quanto occupa. (La "memoria libera" di Vulkan non va bene:
+    // cambia appena il programma apre la scheda e conta anche il gioco.)
+    long long processMemory();
+
 } // namespace Gpu
